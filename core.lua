@@ -112,6 +112,9 @@ do
 			Stopwatch_Clear()
 			StopwatchFrame:Hide()
 		end,
+		Get = function(self)
+			return StopwatchTicker.timer
+		end,
 	}
 end
 
@@ -119,7 +122,13 @@ local State, Frames
 do
 	local NODE_EDGE_TRIM = 2 -- amount of points to be trimmed for more accurate blizzard like transitions between several taxi nodes
 	local TAXI_MAX_SLEEP = 60 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
-	local TAXI_TIME_CORRECT = false -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
+
+	local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
+	local TAXI_TIME_CORRECT_INTERVAL = 2 -- adjusts the timer X amount of times during flight to better calculate actual arrival time (some taxi paths slow down at start, or speed up eventually, this causes some seconds differences, this aims to counter that a bit)
+	local TAXI_TIME_CORRECT_IGNORE = 5 -- amount of seconds we need to be wrong, before adjusting the timer
+
+	local TAXI_TIME_CORRECT_MUTE_UPDATES = true -- mute the mid-flight updates
+	local TAXI_TIME_CORRECT_MUTE_SUMMARY = true -- mute the end-of-flight summary
 
 	local function GetTaxiPathNodes(pathId, trimEdges, whatEdge)
 		local nodes = {}
@@ -285,6 +294,7 @@ do
 			local info = self:GetFlightInfo()
 
 			if info then
+				--[=[
 				GameTooltip:AddLine(" ")
 
 				for i = 1, #info.nodes do
@@ -292,12 +302,15 @@ do
 
 					GameTooltip:AddLine(i .. ". " .. node.name, .8, .8, .8, false)
 				end
+				--]=]
 
-				-- GameTooltip:AddLine(" ")
-				-- GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
-				-- GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
-				-- GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
-				-- GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
+				--[=[
+				GameTooltip:AddLine(" ")
+				GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
+				GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
+				GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
+				GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
+				--]=]
 
 				GameTooltip:AddLine(" ")
 				GameTooltip:AddLine("~ " .. GetTimeStringFromSeconds(info.distance / info.speed, false, true) .. " flight time", 1, 1, 1, false)
@@ -323,6 +336,10 @@ do
 				self.gps = C_Timer.NewTicker(.5, function()
 					if not gps.distance then
 						gps.distance = info.distance
+
+						if TAXI_TIME_CORRECT and TAXI_TIME_CORRECT_INTERVAL then
+							gps.timeCorrection = { progress = info.distance, chunk = gps.distance * (1 / (TAXI_TIME_CORRECT_INTERVAL + 1)), adjustments = 0 }
+						end
 					end
 
 					if UnitOnTaxi("player") then
@@ -337,10 +354,44 @@ do
 
 							if gps.lastX then
 								gps.distance = gps.distance - math.sqrt((gps.lastX - gps.x)^2 + (gps.lastY - gps.y)^2)
-							end
+								gps.distancePercent = gps.distance / info.distance
 
-							if gps.distance > 0 and gps.speed > 0 then
-								Stopwatch:Start(gps.distance / gps.speed, TAXI_TIME_CORRECT)
+								if gps.distance > 0 and gps.speed > 0 then
+									local timeCorrection = TAXI_TIME_CORRECT
+
+									-- if time correction is enabled to correct in intervals we will do the logic here
+									if gps.timeCorrection then
+										timeCorrection = false
+
+										-- make sure we are at a checkpoint before calculating the new time
+										if gps.timeCorrection.progress > gps.distance then
+											timeCorrection = true
+
+											-- set next checkpoint, and calculate time difference
+											gps.timeCorrection.progress = gps.timeCorrection.progress - gps.timeCorrection.chunk
+											gps.timeCorrection.difference = math.floor(Stopwatch:Get() - (gps.distance / gps.speed))
+
+											-- check if time difference is within acceptable boundaries
+											if TAXI_TIME_CORRECT_IGNORE > 0 and math.abs(gps.timeCorrection.difference) < TAXI_TIME_CORRECT_IGNORE then
+												timeCorrection = false
+
+											elseif gps.stopwatchSet then
+												gps.timeCorrection.adjustments = gps.timeCorrection.adjustments + gps.timeCorrection.difference
+
+												-- announce the stopwatch time adjustments if significant enough to be noteworthy, and if we have more than just one interval (we then just summarize at the end)
+												if not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
+													DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. math.abs(gps.timeCorrection.difference) .. " seconds|r.", 1, 1, 0)
+												end
+											end
+										end
+									end
+
+									-- set or override the stopwatch based on time correction mode
+									Stopwatch:Start(gps.distance / gps.speed, timeCorrection)
+
+									-- stopwatch was set at least once
+									gps.stopwatchSet = true
+								end
 							end
 						end
 
@@ -351,6 +402,15 @@ do
 						gps.wasOnTaxi = GetTime() - gps.waitingOnTaxi > TAXI_MAX_SLEEP
 
 					elseif gps.wasOnTaxi then
+						-- announce the time adjustments, if any
+						if not TAXI_TIME_CORRECT_MUTE_SUMMARY and gps.timeCorrection then
+							local absAdjustments = math.abs(gps.timeCorrection.adjustments)
+
+							if absAdjustments > TAXI_TIME_CORRECT_IGNORE then
+								DEFAULT_CHAT_FRAME:AddMessage("Your trip was |cffFFFFFF" .. absAdjustments .. " seconds|r " .. (gps.timeCorrection.adjustments < 0 and "longer" or "shorter") .. " than indicated.", 1, 1, 0)
+							end
+						end
+
 						Stopwatch:Stop()
 						self.gps:Cancel()
 						table.wipe(gps)
