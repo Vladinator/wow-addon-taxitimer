@@ -1,0 +1,8 @@
+## Interface: 70000
+## Title: TaxiTimer
+## Notes: Estimates flight times when using the taxi service.
+## Author: Vladinator
+## Version: 7.0.0.160706
+## SavedVariables: TaxiTimerDB
+db.lua
+core.lua
