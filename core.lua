@@ -408,6 +408,8 @@ local addon = CreateFrame("Frame")
 addon:SetScript("OnEvent", function(self, event, ...) self[event](self, event, ...) end)
 
 function addon:ADDON_LOADED(event)
+	local numLoaded, numTotal = 0, 0
+
 	for name, manifest in pairs(Frames) do
 		local frame = _G[name]
 
@@ -416,7 +418,15 @@ function addon:ADDON_LOADED(event)
 				manifest.loaded = true
 				manifest:OnLoad(frame)
 			end
+
+			numLoaded = numLoaded + 1
 		end
+
+		numTotal = numTotal + 1
+	end
+
+	if numLoaded == numTotal then
+		addon:UnregisterEvent(event)
 	end
 end
 
