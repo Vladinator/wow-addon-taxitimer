@@ -317,7 +317,7 @@ do
 									local timeCorrection = TAXI_TIME_CORRECT
 
 									-- DEBUG: current progress
-									DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", gps.distance, gps.distancePercent * 100), 1, 1, 0)
+									-- DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", gps.distance, gps.distancePercent * 100), 1, 1, 0)
 
 									-- if time correction is enabled to correct in intervals we will do the logic here
 									if gps.timeCorrection then
