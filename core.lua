@@ -1,61 +1,6 @@
 local addonName, ns = ...
 
-local Catmull
-do
-	local SPLINE_TIGHTNESS = .5
-
-	local ABSCISSAS, WEIGHTS = {}, {}
-	do
-		ABSCISSAS[ 1 ], WEIGHTS[ 1 ] = 0, 128 / 225
-		ABSCISSAS[ 2 ], WEIGHTS[ 2 ] = 1 / 21 * ( 245 - 14 * ( 70 ) ^ .5 ) ^ .5, 1 / 900 * ( 322 + 13 * ( 70 ) ^ .5 )
-		ABSCISSAS[ 3 ], WEIGHTS[ 3 ] = -ABSCISSAS[ 2 ], WEIGHTS[ 2 ]
-		ABSCISSAS[ 4 ], WEIGHTS[ 4 ] = 1 / 21 * ( 245 + 14 * ( 70 ) ^ .5 ) ^ .5, 1 / 900 * ( 322 - 13 * ( 70 ) ^ .5 )
-		ABSCISSAS[ 5 ], WEIGHTS[ 5 ] = -ABSCISSAS[ 4 ], WEIGHTS[ 4 ]
-
-		for i = 1, #ABSCISSAS do
-			ABSCISSAS[ i ], WEIGHTS[ i ] = ABSCISSAS[ i ] / 2 + 1 / 2, WEIGHTS[ i ] / 2
-		end
-	end
-
-	local function GetLength(points)
-		local P0, P1, P2, P3
-		local Tan1x, Tan1y, Tan1z, Tan2x, Tan2y, Tan2z
-		local C1x, C1y, C1z, C2x, C2y, C2z, C3x, C3y, C3z
-		local dX, dY, dZ, t, t2
-		local length = 0
-
-		for i = 2, #points - 2 do
-			P0, P1, P2, P3 = points[ i - 1 ], points[ i ], points[ i + 1 ], points[ i + 2 ]
-
-			Tan1x, Tan1y, Tan1z = SPLINE_TIGHTNESS * ( P2[ 1 ] - P0[ 1 ] ), SPLINE_TIGHTNESS * ( P2[ 2 ] - P0[ 2 ] ), SPLINE_TIGHTNESS * ( P2[ 3 ] - P0[ 3 ] )
-			Tan2x, Tan2y, Tan2z = SPLINE_TIGHTNESS * ( P3[ 1 ] - P1[ 1 ] ), SPLINE_TIGHTNESS * ( P3[ 2 ] - P1[ 2 ] ), SPLINE_TIGHTNESS * ( P3[ 3 ] - P1[ 3 ] )
-
-			C3x = 3 * ( 2 * P1[ 1 ] - 2 * P2[ 1 ] + Tan1x + Tan2x )
-			C3y = 3 * ( 2 * P1[ 2 ] - 2 * P2[ 2 ] + Tan1y + Tan2y )
-			C3z = 3 * ( 2 * P1[ 3 ] - 2 * P2[ 3 ] + Tan1z + Tan2z )
-			C2x = 2 * ( -3 * P1[ 1 ] + 3 * P2[ 1 ] - 2 * Tan1x - Tan2x )
-			C2y = 2 * ( -3 * P1[ 2 ] + 3 * P2[ 2 ] - 2 * Tan1y - Tan2y )
-			C2z = 2 * ( -3 * P1[ 3 ] + 3 * P2[ 3 ] - 2 * Tan1z - Tan2z )
-			C1x, C1y, C1z = Tan1x, Tan1y, Tan1z
-
-			for j = 1, #ABSCISSAS do
-				local t = ABSCISSAS[ j ]
-				t2 = t ^ 2
-				dX = C3x * t2 + C2x * t + C1x
-				dY = C3y * t2 + C2y * t + C1y
-				dZ = C3z * t2 + C2z * t + C1z
-
-				length = length + ( dX * dX + dY * dY + dZ * dZ ) ^ .5 * WEIGHTS[ j ]
-			end
-		end
-
-		return length
-	end
-
-	function Catmull(points)
-		return GetLength(points)
-	end
-end
+local CatmulDistance = ns.CatmulDistance
 
 local Speed
 do
@@ -118,33 +63,38 @@ do
 	}
 end
 
-local State, Frames
+local State
+local Frames
 do
-	local NODE_EDGE_TRIM = 2 -- amount of points to be trimmed for more accurate blizzard like transitions between several taxi nodes
-	local TAXI_MAX_SLEEP = 60 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
+	local NODE_EDGE_TRIM = 10 -- amount of points to be trimmed for more accurate blizzard like transitions between several taxi nodes
+	local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
 
 	local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
 	local TAXI_TIME_CORRECT_INTERVAL = 2 -- adjusts the timer X amount of times during flight to better calculate actual arrival time (some taxi paths slow down at start, or speed up eventually, this causes some seconds differences, this aims to counter that a bit)
 	local TAXI_TIME_CORRECT_IGNORE = 5 -- amount of seconds we need to be wrong, before adjusting the timer
 
-	local TAXI_TIME_CORRECT_MUTE_UPDATES = true -- mute the mid-flight updates
-	local TAXI_TIME_CORRECT_MUTE_SUMMARY = true -- mute the end-of-flight summary
+	local TAXI_TIME_CORRECT_MUTE_UPDATES = false -- mute the mid-flight updates
+	local TAXI_TIME_CORRECT_MUTE_SUMMARY = false -- mute the end-of-flight summary
 
 	local function GetTaxiPathNodes(pathId, trimEdges, whatEdge)
 		local nodes = {}
 		local exists = false
 
 		for i = 1, #ns.TaxiPathNode do
-			local taxiPathNode = ns.TaxiPathNode[i]
+			local taxiPathChunk = ns.TaxiPathNode[i]
 
-			if taxiPathNode[4] == pathId then
-				exists = true
+			for j = 1, #taxiPathChunk do
+				local taxiPathNode = taxiPathChunk[j]
 
-				table.insert(nodes, {taxiPathNode[1], taxiPathNode[2], taxiPathNode[3], taxiPathNode[5]})
+				if taxiPathNode[ns.TAXIPATHNODE.PATHID] == pathId then
+					exists = true
+
+					table.insert(nodes, {taxiPathNode[ns.TAXIPATHNODE.ID], x = taxiPathNode[ns.TAXIPATHNODE.LOC_0], y = taxiPathNode[ns.TAXIPATHNODE.LOC_1], z = taxiPathNode[ns.TAXIPATHNODE.LOC_2]})
+				end
 			end
 		end
 
-		if trimEdges and #nodes > trimEdges * 3 then
+		if trimEdges and #nodes > trimEdges then
 			if whatEdge == nil or whatEdge == 1 then
 				for i = 1, trimEdges do
 					table.remove(nodes, 1)
@@ -165,12 +115,19 @@ do
 		local pathId
 
 		for i = 1, #ns.TaxiPath do
-			local taxiPath = ns.TaxiPath[i]
-			local fromId, toId = taxiPath[1], taxiPath[2]
+			local taxiPathChunk = ns.TaxiPath[i]
 
-			if fromId == from and toId == to then
-				pathId = taxiPath[3]
+			for j = 1, #taxiPathChunk do
+				local taxiPath = taxiPathChunk[j]
+				local fromId, toId = taxiPath[ns.TAXIPATH.FROMTAXINODE], taxiPath[ns.TAXIPATH.TOTAXINODE]
 
+				if fromId == from and toId == to then
+					pathId = taxiPath[ns.TAXIPATH.ID]
+					break
+				end
+			end
+
+			if pathId then
 				break
 			end
 		end
@@ -199,7 +156,7 @@ do
 			end
 
 			local exists, temp = GetTaxiPath(from.nodeID, to.nodeID, trimEdges, whatEdge)
-			if exists then
+			if exists and temp then
 				for j = 1, #temp do
 					table.insert(points, temp[j])
 				end
@@ -219,11 +176,11 @@ do
 			self.areaID, self.from, self.to = GetTaxiMapID(), nil
 			table.wipe(self.nodes)
 
-			local taxiNodes = GetAllTaxiNodes()
+			local taxiNodes = C_TaxiMap.GetAllTaxiNodes(self.areaID)
 			for i = 1, #taxiNodes do
 				local taxiNode = taxiNodes[i]
 
-				if taxiNode.type == LE_FLIGHT_PATH_TYPE_CURRENT then
+				if taxiNode.state == Enum.FlightPathState.Current then
 					self.from = taxiNode
 				end
 
@@ -238,7 +195,7 @@ do
 				self.to = self.nodes[button:GetID()]
 			end
 
-			if self.to and self.to.type == LE_FLIGHT_PATH_TYPE_UNREACHABLE then
+			if self.to and self.to.state == Enum.FlightPathState.Unreachable then
 				self.to = nil
 			end
 		end,
@@ -275,7 +232,7 @@ do
 
 			local points = GetPointsFromNodes(nodes)
 			if points and points[1] then
-				local distance = Catmull(points)
+				local distance = CatmulDistance(points)
 
 				if distance and distance > 0 then
 					local speed = Speed(self.areaID)
@@ -359,6 +316,9 @@ do
 								if gps.distance > 0 and gps.speed > 0 then
 									local timeCorrection = TAXI_TIME_CORRECT
 
+									-- DEBUG: current progress
+									DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", gps.distance, gps.distancePercent * 100), 1, 1, 0)
+
 									-- if time correction is enabled to correct in intervals we will do the logic here
 									if gps.timeCorrection then
 										timeCorrection = false
@@ -431,7 +391,7 @@ do
 		end,
 
 		Arrived = function(self)
-			PlaySoundKitID(34089, "Master")
+			PlaySound(34089, "Master", true)
 			FlashClientIcon()
 		end,
 	}
