@@ -1,6 +1,5 @@
 # TaxiTimer
-*.csv
-*.php
+scripts/svg
 
 # OSX
 ._*
@@ -33,7 +32,6 @@ Thumbs.db
 # Notepad++
 nppBackup/
 *.bak
-*.out
 
 # Misc
 *.ignore

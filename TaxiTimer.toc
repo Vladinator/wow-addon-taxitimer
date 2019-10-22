@@ -1,9 +1,11 @@
-## Interface: 82000
+## Interface: 80205
 ## Title: TaxiTimer
 ## Notes: Estimates flight times when using the taxi service.
 ## Author: Vladinator
 ## Version: 8.2.0.190510
 ## SavedVariables: TaxiTimerDB
+## X-Curse-Project-ID: 75421
+## X-WoWI-ID: 24026
 db.lua
 catmul.lua
 core.lua

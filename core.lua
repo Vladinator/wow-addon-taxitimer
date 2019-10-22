@@ -1,6 +1,9 @@
 local addonName, ns = ...
 
 local CatmulDistance = ns.CatmulDistance
+local TaxiPathNode = ns.taxipathnode
+local TaxiPath = ns.taxipath
+local TaxiNodes = ns.taxinodes
 
 local Speed
 do
@@ -13,7 +16,7 @@ do
 		-- [485] = TAXI_SPEED_FALLBACK, -- Northrend
 		-- [862] = TAXI_SPEED_FALLBACK, -- Pandaria
 		[962] = 40+1/3, -- Draenor
-		[1007] = 50+1/3, -- Broken Isles
+		[1007] = 40+1/3, -- Broken Isles
 	}, {
 		__index = function()
 			return TAXI_SPEED_FALLBACK
@@ -80,8 +83,8 @@ do
 		local nodes = {}
 		local exists = false
 
-		for i = 1, #ns.TaxiPathNode do
-			local taxiPathChunk = ns.TaxiPathNode[i]
+		for i = 1, #TaxiPathNode do
+			local taxiPathChunk = TaxiPathNode[i]
 
 			for j = 1, #taxiPathChunk do
 				local taxiPathNode = taxiPathChunk[j]
@@ -114,8 +117,8 @@ do
 	local function GetTaxiPath(from, to, trimEdges, whatEdge)
 		local pathId
 
-		for i = 1, #ns.TaxiPath do
-			local taxiPathChunk = ns.TaxiPath[i]
+		for i = 1, #TaxiPath do
+			local taxiPathChunk = TaxiPath[i]
 
 			for j = 1, #taxiPathChunk do
 				local taxiPath = taxiPathChunk[j]
@@ -175,6 +178,10 @@ do
 		Update = function(self)
 			self.areaID, self.from, self.to = GetTaxiMapID(), nil
 			table.wipe(self.nodes)
+
+			if not self.areaID then
+				return
+			end
 
 			local taxiNodes = C_TaxiMap.GetAllTaxiNodes(self.areaID)
 			for i = 1, #taxiNodes do
