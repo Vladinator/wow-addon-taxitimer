@@ -1,3 +1,5 @@
 package-as: TaxiTimer
 enable-nolib-creation: no
-ignore: scripts/
+ignore:
+  - scripts/
+  - .travis.yml
