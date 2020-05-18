@@ -11,6 +11,6 @@ $tp->Write(__DIR__ . "/../db.lua");
 // generate the db.svg file
 $tp->IncludeFields(true);
 $tp->Read();
-#$tp->WriteSvg(__DIR__ . "/svg/db_1718.svg", 1718);die; // DEBUG
+// $tp->WriteSvg(__DIR__ . "/svg/db_1718.svg", 1718);die; // DEBUG
 foreach ($tp->GetMaps() as $map)
     $tp->WriteSvg(__DIR__ . "/svg/db_" . $map . ".svg", $map);
