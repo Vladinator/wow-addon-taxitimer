@@ -5,6 +5,9 @@ local TaxiPathNode = ns.taxipathnode
 local TaxiPath = ns.taxipath
 local TaxiNodes = ns.taxinodes
 
+local SHOW_EXTRA_DEBUG_INFO = true
+local TEST_SPEEDUP_PATH_LOGIC = true
+
 local Speed
 do
 	local TAXI_SPEED_FALLBACK = 30+1/3
@@ -17,11 +20,22 @@ do
 		-- [862] = TAXI_SPEED_FALLBACK, -- Pandaria
 		[962] = 40+1/3, -- Draenor
 		[1007] = 40+1/3, -- Broken Isles
+		[2222] = 40+1/3, -- Shadowlands
+		["P7572"] = 200, -- Shadowlands (path from Oribos)
+		["P7916"] = 200, -- Shadowlands (path from Oribos)
+		["P8008"] = 200, -- Shadowlands (path from Oribos)
+		["P8013"] = 200, -- Shadowlands (path from Oribos)
+		["P8318"] = 200, -- Shadowlands (path from Oribos)
+		["P7917"] = 200, -- Shadowlands (path to Oribos)
+		["P8009"] = 200, -- Shadowlands (path to Oribos)
+		["P8011"] = 200, -- Shadowlands (path to Oribos)
+		["P8012"] = 200, -- Shadowlands (path to Oribos)
+		["P8319"] = 200, -- Shadowlands (path to Oribos)
 	}, {
 		__index = function()
 			return TAXI_SPEED_FALLBACK
 		end,
-		__call = function(self, areaID, useLive, noSafety)
+		__call = function(self, areaID, useLive, noSafety, info, gps)
 			if useLive then
 				local speed = GetUnitSpeed("player")
 				if not noSafety then
@@ -29,15 +43,41 @@ do
 				end
 				return speed
 			elseif areaID then
-				return self[areaID]
+				local speed = self[areaID]
+				if TEST_SPEEDUP_PATH_LOGIC and info and info.points then
+					local totalPoints
+					local totalDistance
+					local totalSpeed
+					for i = 2, #info.points do
+						local prevPoint = info.points[i - 1]
+						local point = info.points[i]
+						local pathSpeed = point.pathId and rawget(self, "P" .. point.pathId)
+						if pathSpeed then
+							local distanceBetween = math.sqrt((prevPoint.x - point.x)^2 + (prevPoint.y - point.y)^2)
+							if distanceBetween > 0 then
+								totalPoints = (totalPoints or 1) + 1
+								totalDistance = (totalDistance or 0) + distanceBetween
+								totalSpeed = (totalSpeed or 0) + pathSpeed
+							end
+						end
+					end
+					if totalPoints then
+						local distancePercent = totalDistance / info.distance
+						local averageSpeed = totalSpeed / totalPoints
+						local speedPercent = averageSpeed / speed
+						info.donotadjustarrivaltime = true
+						info.distance = info.distance / (speedPercent / distancePercent)
+					end
+				end
+				return speed
 			else
 				return TAXI_SPEED_FALLBACK
 			end
 		end,
 	})
 
-	function Speed(areaID, useLive, noSafety)
-		return fallback(areaID, useLive == true, noSafety == true)
+	function Speed(areaID, useLive, noSafety, info, gps)
+		return fallback(areaID, useLive == true, noSafety == true, info, gps)
 	end
 end
 
@@ -92,7 +132,7 @@ do
 				if taxiPathNode[ns.TAXIPATHNODE.PATHID] == pathId then
 					exists = true
 
-					table.insert(nodes, {taxiPathNode[ns.TAXIPATHNODE.ID], x = taxiPathNode[ns.TAXIPATHNODE.LOC_0], y = taxiPathNode[ns.TAXIPATHNODE.LOC_1], z = taxiPathNode[ns.TAXIPATHNODE.LOC_2]})
+					table.insert(nodes, {taxiPathNode[ns.TAXIPATHNODE.ID], x = taxiPathNode[ns.TAXIPATHNODE.LOC_0], y = taxiPathNode[ns.TAXIPATHNODE.LOC_1], z = taxiPathNode[ns.TAXIPATHNODE.LOC_2], pathId = pathId})
 				end
 			end
 		end
@@ -176,7 +216,7 @@ do
 		nodes = {},
 
 		Update = function(self)
-			self.areaID, self.from, self.to = GetTaxiMapID(), nil
+			self.areaID, self.from, self.to = GetTaxiMapID() or 0, nil
 			table.wipe(self.nodes)
 
 			if not self.areaID then
@@ -195,7 +235,15 @@ do
 			end
 		end,
 
+		IsValidState = function(self)
+			return self.areaID > 0 and self.from and next(self.nodes)
+		end,
+
 		UpdateButton = function(self, button)
+			if not self:IsValidState() then
+				self:Update()
+			end
+
 			if button.taxiNodeData then
 				self.to = self.nodes[button.taxiNodeData.slotIndex]
 			else
@@ -242,14 +290,13 @@ do
 				local distance = CatmulDistance(points)
 
 				if distance and distance > 0 then
-					local speed = Speed(self.areaID)
-
-					return {
+					local info = {
 						distance = distance,
-						speed = speed,
 						nodes = nodes,
 						points = points,
 					}
+					info.speed = Speed(self.areaID, nil, nil, info)
+					return info
 				end
 			end
 		end,
@@ -258,23 +305,34 @@ do
 			local info = self:GetFlightInfo()
 
 			if info then
-				--[=[
-				GameTooltip:AddLine(" ")
+				
+				if SHOW_EXTRA_DEBUG_INFO then
+					local pathIds = {}
 
-				for i = 1, #info.nodes do
-					local node = info.nodes[i]
+					if TEST_SPEEDUP_PATH_LOGIC then
+						local unique = {}
+						for i = 1, #info.points do
+							local point = info.points[i]
+							if point.pathId and not unique[point.pathId] then
+								unique[point.pathId] = true
+								pathIds[#pathIds + 1] = point.pathId
+							end
+						end
+					end
 
-					GameTooltip:AddLine(i .. ". " .. node.name, .8, .8, .8, false)
+					GameTooltip:AddLine(" ")
+					for i = 1, #info.nodes do
+						local node = info.nodes[i]
+						local pathId = pathIds[i]
+						GameTooltip:AddLine(i .. ". " .. node.name .. (pathId and " (" .. pathId .. ")" or ""), .8, .8, .8, false)
+					end
+
+					GameTooltip:AddLine(" ")
+					GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
+					GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
+					GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
+					GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
 				end
-				--]=]
-
-				--[=[
-				GameTooltip:AddLine(" ")
-				GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
-				GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
-				GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
-				GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
-				--]=]
 
 				GameTooltip:AddLine(" ")
 				GameTooltip:AddLine("~ " .. GetTimeStringFromSeconds(info.distance / info.speed, false, true) .. " flight time", 1, 1, 1, false)
@@ -301,14 +359,14 @@ do
 					if not gps.distance then
 						gps.distance = info.distance
 
-						if TAXI_TIME_CORRECT and TAXI_TIME_CORRECT_INTERVAL then
+						if TAXI_TIME_CORRECT and TAXI_TIME_CORRECT_INTERVAL and not info.donotadjustarrivaltime then
 							gps.timeCorrection = { progress = info.distance, chunk = gps.distance * (1 / (TAXI_TIME_CORRECT_INTERVAL + 1)), adjustments = 0 }
 						end
 					end
 
 					if UnitOnTaxi("player") then
 						gps.wasOnTaxi = true
-						gps.speed = Speed(self.areaID, true)
+						gps.speed = Speed(self.areaID, true, nil, info, gps)
 						gps.x, gps.y, _, gps.areaID = UnitPosition("player")
 
 						if gps.lastSpeed then
