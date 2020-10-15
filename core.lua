@@ -209,6 +209,12 @@ do
 		return points
 	end
 
+	local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
+		local seconds = asMs and floor(timeAmount / 1000) or timeAmount
+		local displayZeroHours = not (dropZeroHours and hours == 0)
+		return SecondsToClock(seconds, displayZeroHours)
+	end
+
 	State = {
 		areaID = 0,
 		from = nil,
