@@ -6,31 +6,16 @@ local TaxiPath = ns.taxipath
 local TaxiNodes = ns.taxinodes
 
 local SHOW_EXTRA_DEBUG_INFO = true
-local TEST_SPEEDUP_PATH_LOGIC = true
 
 local Speed
 do
 	local TAXI_SPEED_FALLBACK = 30+1/3
+	local TAXI_SPEED_FASTER = 40+1/3
 
 	local fallback = setmetatable({
-		-- [13] = TAXI_SPEED_FALLBACK, -- Kalimdor
-		-- [14] = TAXI_SPEED_FALLBACK, -- Eastern Kingdoms
-		-- [466] = TAXI_SPEED_FALLBACK, -- Outland
-		-- [485] = TAXI_SPEED_FALLBACK, -- Northrend
-		-- [862] = TAXI_SPEED_FALLBACK, -- Pandaria
-		[962] = 40+1/3, -- Draenor
-		[1007] = 40+1/3, -- Broken Isles
-		[2222] = 40+1/3, -- Shadowlands
-		["P7572"] = 200, -- Shadowlands (path from Oribos)
-		["P7916"] = 200, -- Shadowlands (path from Oribos)
-		["P8008"] = 200, -- Shadowlands (path from Oribos)
-		["P8013"] = 200, -- Shadowlands (path from Oribos)
-		["P8318"] = 200, -- Shadowlands (path from Oribos)
-		["P7917"] = 200, -- Shadowlands (path to Oribos)
-		["P8009"] = 200, -- Shadowlands (path to Oribos)
-		["P8011"] = 200, -- Shadowlands (path to Oribos)
-		["P8012"] = 200, -- Shadowlands (path to Oribos)
-		["P8319"] = 200, -- Shadowlands (path to Oribos)
+		[1116] = TAXI_SPEED_FASTER, -- Draenor
+		[1220] = TAXI_SPEED_FASTER, -- Broken Isles
+		[1647] = TAXI_SPEED_FASTER, -- Shadowlands
 	}, {
 		__index = function()
 			return TAXI_SPEED_FALLBACK
@@ -43,33 +28,7 @@ do
 				end
 				return speed
 			elseif areaID then
-				local speed = self[areaID]
-				if TEST_SPEEDUP_PATH_LOGIC and info and info.points then
-					local totalPoints
-					local totalDistance
-					local totalSpeed
-					for i = 2, #info.points do
-						local prevPoint = info.points[i - 1]
-						local point = info.points[i]
-						local pathSpeed = point.pathId and rawget(self, "P" .. point.pathId)
-						if pathSpeed then
-							local distanceBetween = math.sqrt((prevPoint.x - point.x)^2 + (prevPoint.y - point.y)^2)
-							if distanceBetween > 0 then
-								totalPoints = (totalPoints or 1) + 1
-								totalDistance = (totalDistance or 0) + distanceBetween
-								totalSpeed = (totalSpeed or 0) + pathSpeed
-							end
-						end
-					end
-					if totalPoints then
-						local distancePercent = totalDistance / info.distance
-						local averageSpeed = totalSpeed / totalPoints
-						local speedPercent = averageSpeed / speed
-						info.donotadjustarrivaltime = true
-						info.distance = info.distance / (speedPercent / distancePercent)
-					end
-				end
-				return speed
+				return self[areaID]
 			else
 				return TAXI_SPEED_FALLBACK
 			end
@@ -119,6 +78,46 @@ do
 	local TAXI_TIME_CORRECT_MUTE_UPDATES = false -- mute the mid-flight updates
 	local TAXI_TIME_CORRECT_MUTE_SUMMARY = false -- mute the end-of-flight summary
 
+	local SHADOWLANDS_SPEED = Speed(1647)
+	local SHADOWLANDS_WARP_SPEED = 200 -- estimation
+	local SHADOWLANDS_ORIBOS_LIGHTSPEED_PADDING_DISTANCE = SHADOWLANDS_WARP_SPEED*40 -- estimation
+	local SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
+	local SHADOWLANDS_ORIBOS_BASTION_DISTANCE = SHADOWLANDS_SPEED*75
+	local SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
+	local SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
+
+	local SHADOWLANDS_DISTANCE = {
+		[7916] = SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE, -- Oribos > Revendreth, Pridefall Hamlet
+		[7917] = SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE, -- Revendreth, Pridefall Hamlet > Oribos
+		[8013] = SHADOWLANDS_ORIBOS_BASTION_DISTANCE, -- Oribos > Bastion, Aspirant's Rest
+		[8012] = SHADOWLANDS_ORIBOS_BASTION_DISTANCE, -- Bastion, Aspirant's Rest > Oribos
+		[8318] = SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE, -- Oribos > Maldraxxus, Theater of Pain
+		[8319] = SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE, -- Maldraxxus, Theater of Pain > Oribos
+		[8431] = SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE, -- Oribos > Ardenweald, Tirna Vaal
+		[8432] = SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE, -- Ardenweald, Tirna Vaal > Oribos
+	}
+
+	local DISTANCE_ADJUSTMENT = function(pathId, nodes)
+		for i = #nodes, 3, -1 do
+			nodes[i] = nil
+		end
+		local d = SHADOWLANDS_DISTANCE[pathId] or 0
+		nodes[1].x, nodes[1].y, nodes[1].z = 1, 1, 1
+		nodes[2].x, nodes[2].y, nodes[2].z = d + 1, 1, 1
+		return SHADOWLANDS_ORIBOS_LIGHTSPEED_PADDING_DISTANCE, SHADOWLANDS_WARP_SPEED
+	end
+
+	local PATH_ADJUSTMENT = {
+		[7916] = DISTANCE_ADJUSTMENT,
+		[8013] = DISTANCE_ADJUSTMENT,
+		[8318] = DISTANCE_ADJUSTMENT,
+		[8431] = DISTANCE_ADJUSTMENT,
+		[7917] = DISTANCE_ADJUSTMENT,
+		[8012] = DISTANCE_ADJUSTMENT,
+		[8319] = DISTANCE_ADJUSTMENT,
+		[8432] = DISTANCE_ADJUSTMENT,
+	}
+
 	local function GetTaxiPathNodes(pathId, trimEdges, whatEdge)
 		local nodes = {}
 		local exists = false
@@ -151,7 +150,15 @@ do
 			end
 		end
 
-		return exists, nodes[1] and nodes or nil
+		local paddingDistance, paddingSpeed
+		if nodes[2] then
+			local pathAdjustment = PATH_ADJUSTMENT[pathId]
+			if pathAdjustment then
+				paddingDistance, paddingSpeed = pathAdjustment(pathId, nodes)
+			end
+		end
+
+		return exists, nodes[1] and nodes or nil, paddingDistance, paddingSpeed
 	end
 
 	local function GetTaxiPath(from, to, trimEdges, whatEdge)
@@ -183,6 +190,7 @@ do
 	local function GetPointsFromNodes(nodes)
 		local points = {}
 		local numNodes = #nodes
+		local paddingDistance, paddingSpeed
 
 		for i = 2, numNodes do
 			local from, to = nodes[i - 1], nodes[i]
@@ -198,15 +206,17 @@ do
 				whatEdge = 1 -- at the end we trim the left side points
 			end
 
-			local exists, temp = GetTaxiPath(from.nodeID, to.nodeID, trimEdges, whatEdge)
+			local exists, temp, padding, pspeed = GetTaxiPath(from.nodeID, to.nodeID, trimEdges, whatEdge)
 			if exists and temp then
 				for j = 1, #temp do
 					table.insert(points, temp[j])
 				end
+				paddingDistance = padding
+				paddingSpeed = pspeed
 			end
 		end
 
-		return points
+		return points, paddingDistance, paddingSpeed
 	end
 
 	local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
@@ -278,20 +288,24 @@ do
 				local sourceNode = self.nodes[sourceSlotIndex]
 				local destinationNode = self.nodes[destinationSlotIndex]
 
-				if not nodes[sourceNode] then
-					nodes[sourceNode] = true
+				if sourceNode and destinationNode then
 
-					table.insert(nodes, sourceNode)
-				end
+					if not nodes[sourceNode] then
+						nodes[sourceNode] = true
 
-				if not nodes[destinationNode] then
-					nodes[destinationNode] = true
+						table.insert(nodes, sourceNode)
+					end
 
-					table.insert(nodes, destinationNode)
+					if not nodes[destinationNode] then
+						nodes[destinationNode] = true
+
+						table.insert(nodes, destinationNode)
+					end
+
 				end
 			end
 
-			local points = GetPointsFromNodes(nodes)
+			local points, paddingDistance, paddingSpeed = GetPointsFromNodes(nodes)
 			if points and points[1] then
 				local distance = CatmulDistance(points)
 
@@ -300,8 +314,17 @@ do
 						distance = distance,
 						nodes = nodes,
 						points = points,
+						paddingDistance = paddingDistance,
+						paddingSpeed = paddingSpeed,
 					}
 					info.speed = Speed(self.areaID, nil, nil, info)
+					if paddingDistance then
+						info.distance = info.distance + paddingDistance
+					end
+					if paddingSpeed then
+						info.speed = (info.speed + paddingSpeed)/2
+					end
+					-- info.donotadjustarrivaltime = paddingDistance or paddingSpeed
 					return info
 				end
 			end
@@ -314,17 +337,6 @@ do
 				
 				if SHOW_EXTRA_DEBUG_INFO then
 					local pathIds = {}
-
-					if TEST_SPEEDUP_PATH_LOGIC then
-						local unique = {}
-						for i = 1, #info.points do
-							local point = info.points[i]
-							if point.pathId and not unique[point.pathId] then
-								unique[point.pathId] = true
-								pathIds[#pathIds + 1] = point.pathId
-							end
-						end
-					end
 
 					GameTooltip:AddLine(" ")
 					for i = 1, #info.nodes do
@@ -373,10 +385,10 @@ do
 					if UnitOnTaxi("player") then
 						gps.wasOnTaxi = true
 						gps.speed = Speed(self.areaID, true, nil, info, gps)
-						gps.x, gps.y, _, gps.areaID = UnitPosition("player")
+						gps.x, gps.y, _, gps.mapID = UnitPosition("player")
 
 						if gps.lastSpeed then
-							if gps.areaID and gps.lastAreaID and gps.areaID ~= gps.lastAreaID then
+							if gps.mapID and gps.lastMapID and gps.mapID ~= gps.lastMapID then
 								gps.lastX = nil
 							end
 
@@ -427,7 +439,7 @@ do
 						end
 
 						gps.lastSpeed = gps.speed
-						gps.lastX, gps.lastY, gps.lastAreaID = gps.x, gps.y, gps.areaID
+						gps.lastX, gps.lastY, gps.lastMapID = gps.x, gps.y, gps.mapID
 
 					elseif not gps.wasOnTaxi then
 						gps.wasOnTaxi = GetTime() - gps.waitingOnTaxi > TAXI_MAX_SLEEP
