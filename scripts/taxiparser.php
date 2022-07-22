@@ -353,7 +353,7 @@ class TaxiParser {
 	// writes the db into a db.lua file
 	public function Write($outfile = __DIR__ . "/db.lua") {
 		$lua = array();
-		$lua[] = "local ns = select(2, ...) ---@class taxi_ns\r\nlocal F\r\n";
+		$lua[] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n";
 		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {}\r\nend";
 
 		foreach ($this->db as $file => $data) {

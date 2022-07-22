@@ -1,0 +1,14 @@
+{
+    "Lua.diagnostics.globals": [
+        "StopwatchFrame",
+        "Stopwatch_Toggle",
+        "Stopwatch_Clear",
+        "Stopwatch_IsPlaying",
+        "Stopwatch_StartCountdown",
+        "Stopwatch_Play",
+        "StopwatchTicker",
+        "GameTooltip",
+        "DEFAULT_CHAT_FRAME",
+        "FlightMap_FlightPointPinMixin"
+    ]
+}

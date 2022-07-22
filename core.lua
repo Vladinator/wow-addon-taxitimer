@@ -1,8 +1,17 @@
-local ns = select(2, ...) ---@type taxi_ns
+local ns = select(2, ...) ---@class taxi_ns : taxi_ns_db, taxi_ns_catmul
 
 local CatmulDistance = ns.CatmulDistance
+local TAXIPATHNODE = ns.TAXIPATHNODE
+local TAXIPATH = ns.TAXIPATH
 local TaxiPathNode = ns.taxipathnode
 local TaxiPath = ns.taxipath
+
+---@class DBTaxiPathNode
+---@field public x number
+---@field public y number
+---@field public z number
+---@field public pathId number
+---@field public id number
 
 local SHOW_EXTRA_DEBUG_INFO = true
 
@@ -96,6 +105,7 @@ do
 		[8432] = SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE, -- Ardenweald, Tirna Vaal > Oribos
 	}
 
+	---@return number paddingDistance, number paddingSpeed
 	local DISTANCE_ADJUSTMENT = function(pathId, nodes)
 		for i = #nodes, 3, -1 do
 			nodes[i] = nil
@@ -117,8 +127,12 @@ do
 		[8432] = DISTANCE_ADJUSTMENT,
 	}
 
+	---@param pathId number
+	---@param trimEdges number|nil
+	---@param whatEdge number|nil
+	---@return boolean exists, DBTaxiPathNode[]|nil nodes, number|nil paddingDistance, number|nil paddingSpeed
 	local function GetTaxiPathNodes(pathId, trimEdges, whatEdge)
-		local nodes = {}
+		local nodes = {} ---@type DBTaxiPathNode[]
 		local exists = false
 
 		for i = 1, #TaxiPathNode do
@@ -127,10 +141,10 @@ do
 			for j = 1, #taxiPathChunk do
 				local taxiPathNode = taxiPathChunk[j]
 
-				if taxiPathNode[ns.TAXIPATHNODE.PATHID] == pathId then
+				if taxiPathNode[TAXIPATHNODE.PATHID] == pathId then
 					exists = true
 
-					table.insert(nodes, {taxiPathNode[ns.TAXIPATHNODE.ID], x = taxiPathNode[ns.TAXIPATHNODE.LOC_0], y = taxiPathNode[ns.TAXIPATHNODE.LOC_1], z = taxiPathNode[ns.TAXIPATHNODE.LOC_2], pathId = pathId})
+					table.insert(nodes, {taxiPathNode[TAXIPATHNODE.ID], x = taxiPathNode[TAXIPATHNODE.LOC_0], y = taxiPathNode[TAXIPATHNODE.LOC_1], z = taxiPathNode[TAXIPATHNODE.LOC_2], pathId = pathId, id = taxiPathNode[TAXIPATHNODE.ID]})
 				end
 			end
 		end
@@ -160,6 +174,10 @@ do
 		return exists, nodes[1] and nodes or nil, paddingDistance, paddingSpeed
 	end
 
+	---@param from number
+	---@param to number
+	---@param trimEdges number|nil
+	---@param whatEdge number|nil
 	local function GetTaxiPath(from, to, trimEdges, whatEdge)
 		local pathId
 
@@ -168,10 +186,10 @@ do
 
 			for j = 1, #taxiPathChunk do
 				local taxiPath = taxiPathChunk[j]
-				local fromId, toId = taxiPath[ns.TAXIPATH.FROMTAXINODE], taxiPath[ns.TAXIPATH.TOTAXINODE]
+				local fromId, toId = taxiPath[TAXIPATH.FROMTAXINODE], taxiPath[TAXIPATH.TOTAXINODE]
 
 				if fromId == from and toId == to then
-					pathId = taxiPath[ns.TAXIPATH.ID]
+					pathId = taxiPath[TAXIPATH.ID]
 					break
 				end
 			end
@@ -181,22 +199,26 @@ do
 			end
 		end
 
-		if pathId then
-			return GetTaxiPathNodes(pathId, trimEdges, whatEdge)
+		if not pathId then
+			return
 		end
+
+		local exists, nodes, paddingDistance, paddingSpeed = GetTaxiPathNodes(pathId, trimEdges, whatEdge)
+		return exists, nodes, paddingDistance, paddingSpeed
 	end
 
+	---@return DBTaxiPathNode[] points, number|nil paddingDistance, number|nil paddingSpeed
 	local function GetPointsFromNodes(nodes)
-		local points = {}
+		local points = {} ---@type DBTaxiPathNode[]
 		local numNodes = #nodes
 		local paddingDistance, paddingSpeed
 
 		for i = 2, numNodes do
 			local from, to = nodes[i - 1], nodes[i]
-			local trimEdges, whatEdge = NODE_EDGE_TRIM
+			local trimEdges, whatEdge
 
-			if numNodes < 3 then
-				trimEdges = nil -- pointless if there are no jumps between additional nodes
+			if numNodes > 2 then
+				trimEdges = NODE_EDGE_TRIM
 			end
 
 			if i == 2 then
@@ -218,9 +240,12 @@ do
 		return points, paddingDistance, paddingSpeed
 	end
 
+	---@param timeAmount number
+	---@param asMs? boolean
+	---@param dropZeroHours? boolean
 	local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
 		local seconds = asMs and floor(timeAmount / 1000) or timeAmount
-		local displayZeroHours = not (dropZeroHours and hours == 0)
+		local displayZeroHours = not (dropZeroHours and seconds < 3600)
 		return SecondsToClock(seconds, displayZeroHours)
 	end
 
@@ -231,7 +256,7 @@ do
 		nodes = {},
 
 		Update = function(self)
-			self.areaID, self.from, self.to = GetTaxiMapID() or 0, nil
+			self.areaID, self.from, self.to = GetTaxiMapID() or 0, nil, nil
 			table.wipe(self.nodes)
 
 			if not self.areaID then
@@ -281,8 +306,8 @@ do
 			local numRoutes = GetNumRoutes(slotIndex)
 
 			for routeIndex = 1, numRoutes do
-				local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true)
-				local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false)
+				local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic disable-line: redundant-parameter
+				local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false) ---@diagnostic disable-line: redundant-parameter
 
 				local sourceNode = self.nodes[sourceSlotIndex]
 				local destinationNode = self.nodes[destinationSlotIndex]
@@ -365,7 +390,7 @@ do
 				local gps, _ = {
 					wasOnTaxi = false,
 					waitingOnTaxi = GetTime(),
-				}
+				}, nil
 
 				if self.gps then
 					Stopwatch:Stop()
