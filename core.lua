@@ -1,9 +1,8 @@
-local addonName, ns = ...
+local ns = select(2, ...) ---@type taxi_ns
 
 local CatmulDistance = ns.CatmulDistance
 local TaxiPathNode = ns.taxipathnode
 local TaxiPath = ns.taxipath
-local TaxiNodes = ns.taxinodes
 
 local SHOW_EXTRA_DEBUG_INFO = true
 

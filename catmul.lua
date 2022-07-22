@@ -1,4 +1,4 @@
-local _, ns = ...
+local ns = select(2, ...) ---@type taxi_ns
 
 if type(ns) ~= "table" then
     ns = {}

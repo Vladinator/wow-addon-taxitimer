@@ -158,6 +158,11 @@ class TaxiParser {
 			case 2224:
 			case 2228:
 			case 2305:
+			case 1550:
+			case 1549:
+			case 2481: // Sepulcher of the First Ones
+			case 2374: // Zereth Mortis
+			case 2444: // 10.0 Dragon Isles
 				// we default using the values above the switch block
 				break;
 			default:
@@ -348,8 +353,8 @@ class TaxiParser {
 	// writes the db into a db.lua file
 	public function Write($outfile = __DIR__ . "/db.lua") {
 		$lua = array();
-		$lua[] = "local _, ns, F = ...\r\n";
-		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {}\r\nend\r\n";
+		$lua[] = "local ns = select(2, ...) ---@class taxi_ns\r\nlocal F\r\n";
+		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {}\r\nend";
 
 		foreach ($this->db as $file => $data) {
 			$file = mb_strtolower($file);
@@ -368,7 +373,7 @@ class TaxiParser {
 			}
 
 			$temp = implode(",\r\n\t", $temp);
-			$lua[] = "ns." . mb_strtoupper($file) . " = {\r\n\t" . $temp . (!empty($temp) ? "," : "-- TODO") . "\r\n}\r\n";
+			$lua[] = "\r\nns." . mb_strtoupper($file) . " = {\r\n\t" . $temp . (!empty($temp) ? "," : "-- TODO") . "\r\n}";
 		}
 
 		foreach ($this->db as $file => $data) {
@@ -383,7 +388,7 @@ class TaxiParser {
 				$temp[] = "{" . implode(",", $item) . "}";
 			}
 	
-			$lua[] = "ns." . $file . " = {}";
+			$lua[] = "\r\nns." . $file . " = {}";
 	
 			$chunks = array_chunk($temp, 8192);
 			foreach ($chunks as $cindex => $chunk) {
