@@ -17,10 +17,10 @@ local SHOW_EXTRA_DEBUG_INFO = true
 ---@field public Speed fun(areaID: number, useLive?: boolean, noSafety?: boolean): number
 ---@field public GetPointsFromNodes fun(nodes: TaxiNodeInfo[]): TaxiPathNode[], number?, number?
 ---@field public GetFlightInfo fun(taxiNodes: TaxiNodeInfo[], from: TaxiNodeInfo, to: TaxiNodeInfo, areaID?: number): FlightInfo | nil
----@field public TAXIPATHNODE TaxiPathNodeStruct
 ---@field public TAXIPATH TaxiPathStruct
----@field public taxipathnode table<number, any[]>
+---@field public TAXIPATHNODE TaxiPathNodeStruct
 ---@field public taxipath table<number, any[]>
+---@field public taxipathnode table<number, any[]>
 
 ---@class TaxiPath
 ---@field public id number
@@ -173,7 +173,7 @@ do
 	local CatmulDistance = ns.CatmulDistance
 	local TAXIPATH = ns.TAXIPATH
 	local TAXIPATHNODE = ns.TAXIPATHNODE
-	local TaxiPath = ns.TaxiPath
+	local TaxiPath = ns.taxipath
 	local TaxiPathNode = ns.taxipathnode
 
 	local Speed do
