@@ -1,4 +1,4 @@
-local ns = select(2, ...) ---@class taxi_ns_catmul
+local ns = select(2, ...) ---@class taxi_ns
 
 if type(ns) ~= "table" then
     ns = {}
