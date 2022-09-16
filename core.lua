@@ -433,7 +433,7 @@ do
 					if paddingSpeed then
 						info.speed = (info.speed + paddingSpeed)/2
 					end
-					-- info.donotadjustarrivaltime = paddingDistance or paddingSpeed
+					-- info.donotadjustarrivaltime = not not (paddingDistance or paddingSpeed)
 					return info
 				end
 			end
@@ -484,7 +484,11 @@ do
 		end
 
 		function Timer:Get()
-			return StopwatchTicker.timer
+			local timer = StopwatchTicker.timer
+			if not timer or timer < 1 then
+				return 0
+			end
+			return timer
 		end
 
 	end
@@ -495,9 +499,16 @@ do
 		---@class GPS
 		---@field public Start fun(self: GPS, state: State, info: FlightInfo): nil
 
+		---@class GPSInfoTimeCorrection
+		---@field public progress number
+		---@field public chunk number
+		---@field public adjustments number
+		---@field public difference? number
+
 		---@class GPSInfo
 		---@field public wasOnTaxi boolean
 		---@field public waitingOnTaxi number
+		---@field public timeCorrection? GPSInfoTimeCorrection
 
 		local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
 
@@ -516,6 +527,9 @@ do
 		---@param state State
 		---@param info FlightInfo
 		function GPS:Start(state, info)
+			if info.donotadjustarrivaltime then
+				Timer:Start(info.distance / info.speed, true)
+			end
 			GPSInfo = {
 				wasOnTaxi = false,
 				waitingOnTaxi = GetTime(),
@@ -528,7 +542,11 @@ do
 				if not GPSInfo.distance then
 					GPSInfo.distance = info.distance
 					if TAXI_TIME_CORRECT and TAXI_TIME_CORRECT_INTERVAL and not info.donotadjustarrivaltime then
-						GPSInfo.timeCorrection = { progress = info.distance, chunk = GPSInfo.distance * (1 / (TAXI_TIME_CORRECT_INTERVAL + 1)), adjustments = 0 }
+						GPSInfo.timeCorrection = {
+							progress = info.distance,
+							chunk = GPSInfo.distance * (1 / (TAXI_TIME_CORRECT_INTERVAL + 1)),
+							adjustments = 0,
+						}
 					end
 				end
 				if UnitOnTaxi("player") then
@@ -568,7 +586,9 @@ do
 									end
 								end
 								-- set or override the stopwatch based on time correction mode
-								Timer:Start(GPSInfo.distance / GPSInfo.speed, timeCorrection)
+								if not info.donotadjustarrivaltime then
+									Timer:Start(GPSInfo.distance / GPSInfo.speed, timeCorrection)
+								end
 								-- stopwatch was set at least once
 								GPSInfo.stopwatchSet = true
 							end
