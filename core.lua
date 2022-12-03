@@ -179,12 +179,14 @@ do
 	local Speed do
 
 		local TAXI_SPEED_FALLBACK = 30+1/3
-		local TAXI_SPEED_FASTER = 40+1/3
+		local TAXI_SPEED_40 = 40+1/3
+		local TAXI_SPEED_50 = 50+7/9
 
 		local fallback = setmetatable({
-			[1116] = TAXI_SPEED_FASTER, -- Draenor
-			[1220] = TAXI_SPEED_FASTER, -- Broken Isles
-			[1647] = TAXI_SPEED_FASTER, -- Shadowlands
+			[1116] = TAXI_SPEED_40, -- Draenor
+			[1220] = TAXI_SPEED_40, -- Broken Isles
+			[1647] = TAXI_SPEED_40, -- Shadowlands
+			[2444] = TAXI_SPEED_50, -- Dragon Isles
 		}, {
 			__index = function()
 				return TAXI_SPEED_FALLBACK
@@ -519,8 +521,8 @@ do
 		local TAXI_TIME_CORRECT_MUTE_UPDATES = false -- mute the mid-flight updates
 		local TAXI_TIME_CORRECT_MUTE_SUMMARY = false -- mute the end-of-flight summary
 
-		local GPSInfo ---@type GPSInfo|nil
-		local Ticker ---@type Ticker|nil
+		local GPSInfo ---@type GPSInfo?
+		local Ticker ---@type Ticker?
 
 		GPS = {}
 
@@ -538,6 +540,8 @@ do
 				Timer:Stop()
 				Ticker:Cancel()
 			end
+			---@type Ticker
+			---@diagnostic disable-next-line: assign-type-mismatch
 			Ticker = C_Timer.NewTicker(0.5, function()
 				if not GPSInfo.distance then
 					GPSInfo.distance = info.distance
@@ -699,7 +703,9 @@ do
 			return not not (self.areaID and self.areaID > 0 and self.from and next(self.nodes))
 		end
 
-		function State:Update()
+		---@param button? TaxiButton
+		---@param elapsed? number
+		function State:Update(button, elapsed)
 			self.areaID, self.from, self.to = GetTaxiMapID(), nil, nil
 			table.wipe(self.nodes)
 			if not self.areaID then

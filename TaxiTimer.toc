@@ -1,8 +1,8 @@
-## Interface: 90207
+## Interface: 100002
 ## Title: TaxiTimer
 ## Notes: Estimates flight times when using the taxi service.
 ## Author: Vladinator
-## Version: 9.2.7.220917
+## Version: 10.0.2.221203
 ## SavedVariables: TaxiTimerDB
 ## X-Curse-Project-ID: 75421
 ## X-WoWI-ID: 24026

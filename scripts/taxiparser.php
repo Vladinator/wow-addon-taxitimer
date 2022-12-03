@@ -150,7 +150,7 @@ class TaxiParser {
 			case 1666:
 			case 1669:
 			case 1693:
-			case 1718: // OK Nazjatar
+			case 1718: // Nazjatar
 			case 1795:
 			case 1817:
 			case 2175:
@@ -163,6 +163,7 @@ class TaxiParser {
 			case 2481: // Sepulcher of the First Ones
 			case 2374: // Zereth Mortis
 			case 2444: // 10.0 Dragon Isles
+			case 2516: // The Nokhud Offensive
 				// we default using the values above the switch block
 				break;
 			default:
