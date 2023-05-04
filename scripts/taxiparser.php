@@ -163,6 +163,7 @@ class TaxiParser {
 			case 2481: // Sepulcher of the First Ones
 			case 2374: // Zereth Mortis
 			case 2444: // 10.0 Dragon Isles
+			case 2454: // 10.1 Dragon Isles (Zaralek Cavern)
 			case 2516: // The Nokhud Offensive
 				// we default using the values above the switch block
 				break;
