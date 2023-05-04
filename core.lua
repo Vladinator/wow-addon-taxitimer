@@ -455,13 +455,8 @@ do
 	local Speed = ns.Speed
 	local GetFlightInfo = ns.GetFlightInfo
 
-	---@type Timer
+	---@class Timer
 	local Timer do
-
-		---@class Timer
-		---@field public Start fun(self: Timer, seconds: number, override?: boolean): nil
-		---@field public Stop fun(self: Timer, ): nil
-		---@field public Get fun(self: Timer, ): number
 
 		Timer = {}
 
@@ -495,11 +490,8 @@ do
 
 	end
 
-	---@type GPS
+	---@class GPS
 	local GPS do
-
-		---@class GPS
-		---@field public Start fun(self: GPS, state: State, info: FlightInfo): nil
 
 		---@class GPSInfoTimeCorrection
 		---@field public progress number
@@ -520,6 +512,9 @@ do
 
 		local TAXI_TIME_CORRECT_MUTE_UPDATES = false -- mute the mid-flight updates
 		local TAXI_TIME_CORRECT_MUTE_SUMMARY = false -- mute the end-of-flight summary
+
+		---@class Ticker
+		---@field public Cancel fun()
 
 		local GPSInfo ---@type GPSInfo?
 		local Ticker ---@type Ticker?
@@ -623,7 +618,7 @@ do
 
 	end
 
-	---@type State
+	---@class State
 	local State do
 
 		---@class State
@@ -664,7 +659,7 @@ do
 
 		---@param button TaxiButton
 		function State:ButtonTooltip(button)
-			local info = self:GetFlightInfo() ---@type FlightInfo|nil
+			local info = self:GetFlightInfo() ---@type FlightInfo?
 			if not info then
 				return
 			end
@@ -688,7 +683,7 @@ do
 		end
 
 		function State:PlotCourse()
-			local info = self:GetFlightInfo() ---@type FlightInfo|nil
+			local info = self:GetFlightInfo() ---@type FlightInfo?
 			if not info then
 				return
 			end
@@ -703,9 +698,7 @@ do
 			return not not (self.areaID and self.areaID > 0 and self.from and next(self.nodes))
 		end
 
-		---@param button? TaxiButton
-		---@param elapsed? number
-		function State:Update(button, elapsed)
+		function State:Update()
 			self.areaID, self.from, self.to = GetTaxiMapID(), nil, nil
 			table.wipe(self.nodes)
 			if not self.areaID then
@@ -752,7 +745,7 @@ do
 			---@param manifest AddOnManifest
 			---@param frame Frame
 			OnLoad = function(manifest, frame)
-				frame:HookScript("OnShow", function(...) State:Update(...) end)
+				frame:HookScript("OnShow", function() State:Update() end)
 				hooksecurefunc(FlightMap_FlightPointPinMixin, "OnMouseEnter", function(...) State:OnEnter(...) end)
 				hooksecurefunc(FlightMap_FlightPointPinMixin, "OnClick", function(...) State:OnClick(...) end)
 			end,
@@ -763,7 +756,7 @@ do
 			---@param manifest AddOnManifest
 			---@param frame Frame
 			OnLoad = function(manifest, frame)
-				frame:HookScript("OnShow", function(...) State:Update(...) manifest:OnShow() end)
+				frame:HookScript("OnShow", function() State:Update() manifest:OnShow() end)
 			end,
 			---@param manifest AddOnManifest
 			OnShow = function(manifest)
