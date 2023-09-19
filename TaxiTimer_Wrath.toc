@@ -1,11 +1,11 @@
-## Interface: 100105
+## Interface: 30402
 ## IconAtlas: FlightMaster
-## Title: TaxiTimer
+## Title: TaxiTimer (Placeholder)
 ## Notes: Estimates flight times when using the taxi service.
 ## Author: Vladinator
-## Version: 10.1.5.230919
+## Version: 3.4.2.230919
 ## SavedVariables: TaxiTimerDB
 ## X-Curse-Project-ID: 75421
 ## X-WoWI-ID: 24026
-db.lua
-core.lua
+#db.lua
+#core.lua
