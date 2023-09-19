@@ -59,13 +59,15 @@ class TaxiParser {
 	private $unknownmaps = array();
 
 	// session storage for files and db entries
+	private $client;
 	private $files = array();
 	private $db = array();
 	private $pdb;
 
 	// scans the csv folder for relevant files
-	public function __construct($scandir = __DIR__ . "/csv/*.csv") {
-		$this->files = glob($scandir);
+	public function __construct($client = "mainline", $scandir = __DIR__ . "/csv_mainline") {
+		$this->client = $client;
+		$this->files = glob($scandir . "/*.csv");
 		// create the path visual colors
 		for ($r = 64; $r < 255; $r += 32)
 			for ($g = 64; $g < 255; $g += 32)
@@ -109,6 +111,14 @@ class TaxiParser {
 		}
 	}
 
+	// check if we have sufficiently loaded data to process the taxi paths
+	public function CanProcess() {
+		return
+			isset($this->db['taxinodes']) &&
+			isset($this->db['taxipath']) &&
+			isset($this->db['taxipathnode']);
+	}
+
 	// rotate coordinates appropriately for the map
 	private function RotateCoords($x, $y, $map = -1) {
 		$rx = -90;
@@ -116,6 +126,12 @@ class TaxiParser {
 		$fx = -1;
 		$fy = 1;
 		switch ($map) {
+			// classic or wrath
+			case 3:
+			case 12:
+			case 9770568:
+			case 654135852:
+			// mainline
 			case -1:
 			case 0:
 			case 1:
@@ -186,6 +202,9 @@ class TaxiParser {
 			return $this->pdb;
 		$pdb = array();
 
+		if (!$this->CanProcess())
+			return $pdb;
+
 		list ($pathheaders, $pathitems) = $this->db['taxipath'];
 		$pdb['taxipath'] = array();
 		$hasconnections = array();
@@ -220,7 +239,18 @@ class TaxiParser {
 		$pdb['taxinodes'] = array();
 
 		foreach ($nodesitems as $node) {
-			list ($label, $x, $y, $z, $mapOffsetX, $mapOffsetY, $_, $_, $id, $map, $_, $_, $flags, $texture, $atlas, $_, $_, $_, $hmount, $amount) = $node;
+
+			$column_count = count($node);
+
+			if ($this->client === "classic" || $this->client === "wrath") {
+				if ($column_count < 19) continue;
+				list ($label, $x, $y, $z, $mapOffsetX, $mapOffsetY, $_, $_, $id, $map, $_, $_, $flags, $texture, $_, $_, $_, $hmount, $amount) = $node;
+				$atlas = "0";
+			} else {
+				if ($column_count < 20) continue;
+				list ($label, $x, $y, $z, $mapOffsetX, $mapOffsetY, $_, $_, $id, $map, $_, $_, $flags, $texture, $atlas, $_, $_, $_, $hmount, $amount) = $node;
+			}
+
 			$label = preg_replace("/[\"]/", "", $label);
 			$x = floatval($x);
 			$y = floatval($y);
@@ -353,10 +383,12 @@ class TaxiParser {
 	}
 
 	// writes the db into a db.lua file
-	public function Write($outfile = __DIR__ . "/db.lua") {
+	public function Write($outfile = __DIR__ . "/db_mainline.lua") {
 		$lua = array();
 		$lua[] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n";
 		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {}\r\nend";
+
+		printf("Writing lua file for %s...\r\n", $this->client);
 
 		foreach ($this->db as $file => $data) {
 			$file = mb_strtolower($file);
@@ -435,6 +467,12 @@ class TaxiParser {
 	public function GetMaps() {
 		$maps = array();
 
+		if (!$this->CanProcess())
+			return $maps;
+
+		if (!isset($this->db['taxinodes']))
+			return $maps;
+
 		list ($nodesheaders, $nodesitems) = $this->db['taxinodes'];
 
 		foreach ($nodesitems as $node) {
@@ -478,7 +516,7 @@ class TaxiParser {
 	}
 
 	// writes the db into a db.svg file
-	public function WriteSvg($outfile = __DIR__ . "/db.svg", $mapFilter = false, $drawEdges = true, $drawDirectEdges = true) {
+	public function WriteSvg($outfile = __DIR__ . "/db_mainline.svg", $mapFilter = false, $drawEdges = true, $drawDirectEdges = true) {
 		$svgdata = array();
 
 		$pdb = $this->ParseDB(false, $drawEdges, $drawDirectEdges);

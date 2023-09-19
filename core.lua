@@ -19,8 +19,8 @@ local SHOW_EXTRA_DEBUG_INFO = true
 ---@field public GetFlightInfo fun(taxiNodes: TaxiNodeInfo[], from: TaxiNodeInfo, to: TaxiNodeInfo, areaID?: number): FlightInfo | nil
 ---@field public TAXIPATH TaxiPathStruct
 ---@field public TAXIPATHNODE TaxiPathNodeStruct
----@field public taxipath table<number, any[]>
----@field public taxipathnode table<number, any[]>
+---@field public taxipath any[]
+---@field public taxipathnode any[]
 
 ---@class TaxiPath
 ---@field public id number
@@ -262,9 +262,9 @@ do
 		}
 
 		---@param pathId number
-		---@param trimEdges number|nil
-		---@param whatEdge number|nil
-		---@return boolean exists, TaxiPathNode[]|nil nodes, number|nil paddingDistance, number|nil paddingSpeed
+		---@param trimEdges? number
+		---@param whatEdge? number
+		---@return boolean exists, TaxiPathNode[]? nodes, number? paddingDistance, number? paddingSpeed
 		local function GetTaxiPathNodes(pathId, trimEdges, whatEdge)
 			local nodes = {} ---@type TaxiPathNode[]
 			local exists = false
@@ -310,8 +310,8 @@ do
 
 		---@param from number
 		---@param to number
-		---@param trimEdges number|nil
-		---@param whatEdge number|nil
+		---@param trimEdges? number
+		---@param whatEdge? number
 		local function GetTaxiPath(from, to, trimEdges, whatEdge)
 			local pathId
 
@@ -342,7 +342,7 @@ do
 		end
 
 		---@param nodes TaxiNodeInfo[]
-		---@return TaxiPathNode[] points, number|nil paddingDistance, number|nil paddingSpeed
+		---@return TaxiPathNode[] points, number? paddingDistance, number? paddingSpeed
 		function GetPointsFromNodes(nodes)
 			local points = {} ---@type TaxiPathNode[]
 			local numNodes = #nodes
@@ -381,7 +381,7 @@ do
 
 		---@class FlightInfo
 		---@field public distance number
-		---@field public speed number
+		---@field public speed? number
 		---@field public nodes TaxiNodeInfo[]
 		---@field public points TaxiPathNode[]
 		---@field public paddingDistance? number
@@ -503,6 +503,7 @@ do
 		---@field public wasOnTaxi boolean
 		---@field public waitingOnTaxi number
 		---@field public timeCorrection? GPSInfoTimeCorrection
+		---@field public distance? number
 
 		local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
 
@@ -527,6 +528,7 @@ do
 			if info.donotadjustarrivaltime then
 				Timer:Start(info.distance / info.speed, true)
 			end
+			---@class GPSInfo
 			GPSInfo = {
 				wasOnTaxi = false,
 				waitingOnTaxi = GetTime(),
@@ -563,23 +565,24 @@ do
 								local timeCorrection = TAXI_TIME_CORRECT
 								-- DEBUG: current progress
 								-- DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", GPSInfo.distance, GPSInfo.distancePercent * 100), 1, 1, 0)
+								local gpsInfoTimeCorrection = GPSInfo.timeCorrection
 								-- if time correction is enabled to correct in intervals we will do the logic here
-								if GPSInfo.timeCorrection then
+								if gpsInfoTimeCorrection then
 									timeCorrection = false
 									-- make sure we are at a checkpoint before calculating the new time
-									if GPSInfo.timeCorrection.progress > GPSInfo.distance then
+									if gpsInfoTimeCorrection.progress > GPSInfo.distance then
 										timeCorrection = true
 										-- set next checkpoint, and calculate time difference
-										GPSInfo.timeCorrection.progress = GPSInfo.timeCorrection.progress - GPSInfo.timeCorrection.chunk
-										GPSInfo.timeCorrection.difference = math.floor(Timer:Get() - (GPSInfo.distance / GPSInfo.speed))
+										gpsInfoTimeCorrection.progress = gpsInfoTimeCorrection.progress - gpsInfoTimeCorrection.chunk
+										gpsInfoTimeCorrection.difference = math.floor(Timer:Get() - (GPSInfo.distance / GPSInfo.speed))
 										-- check if time difference is within acceptable boundaries
-										if TAXI_TIME_CORRECT_IGNORE > 0 and math.abs(GPSInfo.timeCorrection.difference) < TAXI_TIME_CORRECT_IGNORE then
+										if TAXI_TIME_CORRECT_IGNORE > 0 and math.abs(gpsInfoTimeCorrection.difference) < TAXI_TIME_CORRECT_IGNORE then
 											timeCorrection = false
 										elseif GPSInfo.stopwatchSet then
-											GPSInfo.timeCorrection.adjustments = GPSInfo.timeCorrection.adjustments + GPSInfo.timeCorrection.difference
+											gpsInfoTimeCorrection.adjustments = gpsInfoTimeCorrection.adjustments + gpsInfoTimeCorrection.difference
 											-- announce the stopwatch time adjustments if significant enough to be noteworthy, and if we have more than just one interval (we then just summarize at the end)
 											if not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
-												DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. math.abs(GPSInfo.timeCorrection.difference) .. " seconds|r.", 1, 1, 0)
+												DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. math.abs(gpsInfoTimeCorrection.difference) .. " seconds|r.", 1, 1, 0)
 											end
 										end
 									end
@@ -728,13 +731,13 @@ do
 
 	end
 
-	---@type table<AddOnName, AddOnManifest>
+	---@class Frames
 	local Frames do
 
 		---@class AddOnName : string
 
 		---@class AddOnManifest
-		---@field public loaded boolean
+		---@field public loaded? boolean
 		---@field public OnLoad fun(manifest: AddOnManifest, frame: Frame): nil
 		---@field public OnShow? fun(manifest: AddOnManifest): nil
 
@@ -784,7 +787,7 @@ do
 			local numLoaded, numTotal = 0, 0
 
 			for name, manifest in pairs(Frames) do
-				local frame = _G[name] ---@type Frame|nil
+				local frame = _G[name] ---@type Frame?
 
 				if frame then
 					if not manifest.loaded then
