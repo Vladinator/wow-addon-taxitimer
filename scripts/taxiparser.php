@@ -34,9 +34,9 @@ class TaxiParser {
 			// "Cost",
 		),
 		"taxipathnode" => array(
-			"Loc[0]",
-			"Loc[1]",
-			"Loc[2]",
+			"Loc_0",
+			"Loc_1",
+			"Loc_2",
 			"ID",
 			"PathID",
 			// "NodeIndex",
@@ -181,6 +181,7 @@ class TaxiParser {
 			case 2444: // 10.0 Dragon Isles
 			case 2454: // 10.1 Dragon Isles (Zaralek Cavern)
 			case 2516: // The Nokhud Offensive
+			case 2548: // 10.2 Emerald Dream
 				// we default using the values above the switch block
 				break;
 			default:

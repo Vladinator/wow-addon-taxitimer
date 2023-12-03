@@ -313,17 +313,18 @@ do
 		---@param trimEdges? number
 		---@param whatEdge? number
 		local function GetTaxiPath(from, to, trimEdges, whatEdge)
-			local pathId
+			local pathId ---@type number?
 
 			for i = 1, #TaxiPath do
 				local taxiPathChunk = TaxiPath[i]
 
 				for j = 1, #taxiPathChunk do
 					local taxiPath = taxiPathChunk[j]
-					local fromId, toId = taxiPath[TAXIPATH.FROMTAXINODE], taxiPath[TAXIPATH.TOTAXINODE]
+					local fromId = taxiPath[TAXIPATH.FROMTAXINODE] ---@type number
+					local toId = taxiPath[TAXIPATH.TOTAXINODE] ---@type number
 
 					if fromId == from and toId == to then
-						pathId = taxiPath[TAXIPATH.ID]
+						pathId = taxiPath[TAXIPATH.ID] ---@type number
 						break
 					end
 				end
@@ -346,15 +347,17 @@ do
 		function GetPointsFromNodes(nodes)
 			local points = {} ---@type TaxiPathNode[]
 			local numNodes = #nodes
-			local paddingDistance, paddingSpeed
+			local paddingDistance ---@type number?
+			local paddingSpeed ---@type number?
+			local trimEdges ---@type number?
+
+			if numNodes > 2 then
+				trimEdges = NODE_EDGE_TRIM
+			end
 
 			for i = 2, numNodes do
 				local from, to = nodes[i - 1], nodes[i]
-				local trimEdges, whatEdge
-
-				if numNodes > 2 then
-					trimEdges = NODE_EDGE_TRIM
-				end
+				local whatEdge ---@type number?
 
 				if i == 2 then
 					whatEdge = 2 -- at the beginning we trim the right side points
@@ -399,10 +402,13 @@ do
 			end
 			local nodes = {} ---@type table<TaxiNodeInfo|number, boolean|TaxiNodeInfo>
 			local slotIndex = to.slotIndex
-			local numRoutes = GetNumRoutes(slotIndex)
+			---@type number
+			local numRoutes = GetNumRoutes(slotIndex) ---@diagnostic disable-line: assign-type-mismatch
 			for routeIndex = 1, numRoutes do
-				local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic disable-line: redundant-parameter
-				local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false) ---@diagnostic disable-line: redundant-parameter
+				---@type number
+				local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic disable-line: assign-type-mismatch, redundant-parameter
+				---@type number
+				local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false) ---@diagnostic disable-line: assign-type-mismatch, redundant-parameter
 				local sourceNode = taxiNodes[sourceSlotIndex]
 				local destinationNode = taxiNodes[destinationSlotIndex]
 				if sourceNode and destinationNode then
