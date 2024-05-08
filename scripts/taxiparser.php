@@ -182,6 +182,9 @@ class TaxiParser {
 			case 2454: // 10.1 Dragon Isles (Zaralek Cavern)
 			case 2516: // The Nokhud Offensive
 			case 2548: // 10.2 Emerald Dream
+			case 2552: // 11.0 Khaz Algar (Surface)
+			case 2601: // 11.0 Khaz Algar
+			case 2657: // 11.0 Nerub-ar Palace
 				// we default using the values above the switch block
 				break;
 			default:
