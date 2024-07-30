@@ -5,7 +5,7 @@ ini_set('memory_limit', '-1');
 include_once __DIR__ . "/taxiparser.php";
 
 // loop over the various clients
-foreach (array("mainline", "wrath", "classic") as $client) {
+foreach (array("mainline", "cata", "classic") as $client) {
 
     // define the various paths for this client
     $csv_path = __DIR__ . "/csv_" . $client;
