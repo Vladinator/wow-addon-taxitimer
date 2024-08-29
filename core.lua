@@ -12,16 +12,6 @@ local SHOW_EXTRA_DEBUG_INFO = true
 ---@field public ID 4
 ---@field public PATHID 5
 
----@class taxi_ns
----@field public CatmulDistance fun(path: any[]): number
----@field public Speed fun(areaID: number, useLive?: boolean, noSafety?: boolean): number
----@field public GetPointsFromNodes fun(nodes: TaxiNodeInfo[]): TaxiPathNode[], number?, number?
----@field public GetFlightInfo fun(taxiNodes: TaxiNodeInfo[], from: TaxiNodeInfo, to: TaxiNodeInfo, areaID?: number): FlightInfo | nil
----@field public TAXIPATH TaxiPathStruct
----@field public TAXIPATHNODE TaxiPathNodeStruct
----@field public taxipath any[]
----@field public taxipathnode any[]
-
 ---@class TaxiPath
 ---@field public id number
 ---@field public from number
@@ -34,7 +24,7 @@ local SHOW_EXTRA_DEBUG_INFO = true
 ---@field public pathId number
 ---@field public id number
 
-local ns = select(2, ...) ---@type taxi_ns
+local ns = select(2, ...) ---@class taxi_ns_db
 
 if type(ns) ~= "table" then
     ns = {}
@@ -43,12 +33,20 @@ end
 -- catmul.lua
 do
 
+	---@class Point
+	---@field x number
+	---@field y number
+	---@field z number
+
 	local CatmulDistance do
 		local pow = math.pow
 
 		local C_AMOUNT_OF_POINTS = 10
 		local C_ALPHA = 0.5
 
+		---@param t number
+		---@param p0 Point
+		---@param p1 Point
 		local function GetT(t, p0, p1)
 			local a = pow(p1.x - p0.x, 2) + pow(p1.y - p0.y, 2) + pow(p1.z - p0.z, 2)
 			local b = pow(a, 0.5)
@@ -57,15 +55,17 @@ do
 			return t + c
 		end
 
+		---@param points Point[]
+		---@return Point[]?, number
 		local function GetCatmulPoints(points)
 			if not points or not points[2] then
-				return
+				return ---@diagnostic disable-line: missing-return-value
 			end
 
 			local numNewPoints = 0
-			local newPoints = {}
+			local newPoints = {} ---@type Point[]
 
-			local ph = { x = 0, y = 0, z = 0 }
+			local ph = { x = 0, y = 0, z = 0 } ---@type Point
 			local p0 = points[1] or ph
 			local p1 = points[2] or ph
 			local p2 = points[3] or ph
@@ -120,12 +120,14 @@ do
 			return newPoints, numNewPoints
 		end
 
+		---@param path Point[]
+		---@return Point[]? path, number count
 		local function GetCatmulPath(path)
 			local numNewPath = 0
-			local newPath = {}
+			local newPath = {} ---@type Point[]
 
 			for i = 1, #path - 1 do
-				local points = { path[i - 1], path[i], path[i + 1], path[i + 2] }
+				local points = { path[i - 1], path[i], path[i + 1], path[i + 2] } ---@type Point[]
 				local newPoints, numNewPoints = GetCatmulPoints(points)
 
 				if newPoints then
@@ -142,12 +144,19 @@ do
 
 				return newPath, numNewPath
 			end
+
+			return ---@diagnostic disable-line: missing-return-value
 		end
 
+		---@param p0 Point
+		---@param p1 Point
+		---@return number yards
 		local function GetDistance(p0, p1)
 			return pow(pow(p1.x - p0.x, 2) + pow(p1.y - p0.y, 2) + pow(p1.z - p0.z, 2), 0.5)
 		end
 
+		---@param path Point[]
+		---@return number yards
 		function CatmulDistance(path)
 			local distance = 0
 			local newPath = GetCatmulPath(path)
@@ -239,6 +248,8 @@ do
 			[8432] = SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE, -- Ardenweald, Tirna Vaal > Oribos
 		}
 
+		---@param pathId number
+		---@param nodes TaxiPathNode[]
 		---@return number paddingDistance, number paddingSpeed
 		local DISTANCE_ADJUSTMENT = function(pathId, nodes)
 			for i = #nodes, 3, -1 do
@@ -487,7 +498,7 @@ do
 		end
 
 		function Timer:Get()
-			local timer = StopwatchTicker.timer
+			local timer = StopwatchTicker.timer ---@type number?
 			if not timer or timer < 1 then
 				return 0
 			end
