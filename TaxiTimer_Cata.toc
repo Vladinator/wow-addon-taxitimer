@@ -3,9 +3,11 @@
 ## Title: TaxiTimer
 ## Notes: Estimates flight times when using the taxi service.
 ## Author: Vladinator
-## Version: 4.4.0.231203
+## Version: 4.4.0.240908
 ## SavedVariables: TaxiTimerDB
 ## X-Curse-Project-ID: 75421
 ## X-WoWI-ID: 24026
+## X-Wago-ID: WqKQPy6x
+## X-AddonProvider: github
 db_cata.lua
 core.lua
