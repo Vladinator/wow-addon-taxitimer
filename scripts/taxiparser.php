@@ -185,6 +185,7 @@ class TaxiParser {
 			case 2552: // 11.0 Khaz Algar (Surface)
 			case 2601: // 11.0 Khaz Algar
 			case 2657: // 11.0 Nerub-ar Palace
+			case 2706: // 11.1 Undermine
 				// we default using the values above the switch block
 				break;
 			default:
@@ -390,7 +391,7 @@ class TaxiParser {
 	public function Write($outfile = __DIR__ . "/db_mainline.lua") {
 		$lua = array();
 		$lua[] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n";
-		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {}\r\nend";
+		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {} ---@diagnostic disable-line: missing-fields\r\nend";
 
 		printf("Writing lua file for %s...\r\n", $this->client);
 

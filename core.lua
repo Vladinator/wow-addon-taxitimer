@@ -27,7 +27,7 @@ local SHOW_EXTRA_DEBUG_INFO = true
 local ns = select(2, ...) ---@class taxi_ns_db
 
 if type(ns) ~= "table" then
-    ns = {}
+    ns = {} ---@diagnostic disable-line: missing-fields
 end
 
 -- catmul.lua
@@ -475,7 +475,7 @@ do
 	---@class Timer
 	local Timer do
 
-		Timer = {}
+		Timer = {} ---@diagnostic disable-line: missing-fields
 
 		---@param seconds number
 		---@param override? boolean
@@ -537,7 +537,7 @@ do
 		local GPSInfo ---@type GPSInfo?
 		local Ticker ---@type Ticker?
 
-		GPS = {}
+		GPS = {} ---@diagnostic disable-line: missing-fields
 
 		---@param state State
 		---@param info FlightInfo
@@ -660,7 +660,7 @@ do
 			return SecondsToClock(seconds, displayZeroHours)
 		end
 
-		State = { nodes = {} }
+		State = { nodes = {} } ---@diagnostic disable-line: missing-fields
 
 		---@param button TaxiButton
 		function State:UpdateButton(button)
@@ -758,7 +758,7 @@ do
 		---@field public OnLoad fun(manifest: AddOnManifest, frame: Frame): nil
 		---@field public OnShow? fun(manifest: AddOnManifest): nil
 
-		Frames = {}
+		Frames = {} ---@diagnostic disable-line: missing-fields
 
 		---@type AddOnManifest
 		Frames.FlightMapFrame = {
