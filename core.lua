@@ -694,8 +694,8 @@ do
 				GameTooltip:AddLine(" ")
 				GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
 				GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
-				GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
-				GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
+				GameTooltip:AddLine("Approx. speed: " .. string.format("%.1f", info.speed), .8, .8, .8, false)
+				GameTooltip:AddLine("Distance: ~ " .. string.format("%.1f", info.distance) .. " yards", .8, .8, .8, false)
 			end
 			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine("~ " .. GetTimeStringFromSeconds(info.distance / info.speed, false, true) .. " flight time", 1, 1, 1, false)
