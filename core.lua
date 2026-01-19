@@ -190,12 +190,14 @@ do
 		local TAXI_SPEED_FALLBACK = 30+1/3
 		local TAXI_SPEED_40 = 40+1/3
 		local TAXI_SPEED_50 = 50+7/9
+		local TAXI_SPEED_55 = 55
 
 		local fallback = setmetatable({
 			[1116] = TAXI_SPEED_40, -- Draenor
 			[1220] = TAXI_SPEED_40, -- Broken Isles
 			[1647] = TAXI_SPEED_40, -- Shadowlands
 			[2444] = TAXI_SPEED_50, -- Dragon Isles
+			[2276] = TAXI_SPEED_55, -- Khaz Algar
 		}, {
 			__index = function()
 				return TAXI_SPEED_FALLBACK
@@ -402,6 +404,10 @@ do
 		---@field public paddingSpeed? number
 		---@field public donotadjustarrivaltime? boolean
 
+		local DO_NOT_ADJUST_FOR_MAPS = {
+			[2276] = true, -- Khaz Algar
+		}
+
 		---@param taxiNodes TaxiNodeInfo[]
 		---@param from TaxiNodeInfo
 		---@param to TaxiNodeInfo
@@ -452,7 +458,7 @@ do
 					if paddingSpeed then
 						info.speed = (info.speed + paddingSpeed)/2
 					end
-					-- info.donotadjustarrivaltime = not not (paddingDistance or paddingSpeed)
+					info.donotadjustarrivaltime = not not (areaID and DO_NOT_ADJUST_FOR_MAPS[areaID])
 					return info
 				end
 			end
@@ -598,7 +604,7 @@ do
 										elseif GPSInfo.stopwatchSet then
 											gpsInfoTimeCorrection.adjustments = gpsInfoTimeCorrection.adjustments + gpsInfoTimeCorrection.difference
 											-- announce the stopwatch time adjustments if significant enough to be noteworthy, and if we have more than just one interval (we then just summarize at the end)
-											if not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
+											if not info.donotadjustarrivaltime and not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
 												DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. math.abs(gpsInfoTimeCorrection.difference) .. " seconds|r.", 1, 1, 0)
 											end
 										end

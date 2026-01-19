@@ -126,7 +126,7 @@ class TaxiParser {
 		$fx = -1;
 		$fy = 1;
 		switch ($map) {
-			// classic or wrath
+			// vanilla or classic
 			case 3:
 			case 12:
 			case 9770568:
@@ -186,6 +186,12 @@ class TaxiParser {
 			case 2601: // 11.0 Khaz Algar
 			case 2657: // 11.0 Nerub-ar Palace
 			case 2706: // 11.1 Undermine
+			case 2736: // Razorwind Shores
+			case 2738: // K'aresh
+			case 2735: // Founder's Point
+			case 2771: // Voidstorm
+			case 2965: // Sunkiller Sanctum
+			case 2694: // Harandar
 				// we default using the values above the switch block
 				break;
 			default:
