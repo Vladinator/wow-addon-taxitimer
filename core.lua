@@ -78,6 +78,10 @@ do
 
 			local step = (t2 - t1) / (C_AMOUNT_OF_POINTS - 1)
 
+			if step == 0 or (t2 > t1 and step < 0) or (t1 > t2 and step > 0) then
+				return ---@diagnostic disable-line: missing-return-value
+			end
+
 			for t = t1, t2, step do
 				local t1mt = t1 - t
 				local t1mt0 = t1 - t0
