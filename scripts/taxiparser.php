@@ -192,6 +192,9 @@ class TaxiParser {
 			case 2771: // Voidstorm
 			case 2965: // Sunkiller Sanctum
 			case 2694: // Harandar
+			case 3047: // Val
+			case 3075: // Naigtal
+			case 2916: // Vaults of Atal'Utek
 				// we default using the values above the switch block
 				break;
 			default:
