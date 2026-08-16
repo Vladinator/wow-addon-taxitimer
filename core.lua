@@ -482,6 +482,15 @@ do
 	local Speed = ns.Speed
 	local GetFlightInfo = ns.GetFlightInfo
 
+	---@param timeAmount number
+	---@param asMs? boolean
+	---@param dropZeroHours? boolean
+	local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
+		local seconds = asMs and floor(timeAmount / 1000) or timeAmount
+		local displayZeroHours = not (dropZeroHours and seconds < 3600)
+		return SecondsToClock(seconds, displayZeroHours)
+	end
+
 	---@class Timer
 	local Timer do
 
@@ -661,22 +670,11 @@ do
 		---@class TaxiButton : Button
 		---@field public taxiNodeData TaxiNodeInfo
 
-		---@param timeAmount number
-		---@param asMs? boolean
-		---@param dropZeroHours? boolean
-		local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
-			local seconds = asMs and floor(timeAmount / 1000) or timeAmount
-			local displayZeroHours = not (dropZeroHours and seconds < 3600)
-			return SecondsToClock(seconds, displayZeroHours)
-		end
-
 		State = { nodes = {} } ---@diagnostic disable-line: missing-fields
 
 		---@param button TaxiButton
 		function State:UpdateButton(button)
-			if not self:IsValidState() then
-				self:Update()
-			end
+			self:Update()
 			if button.taxiNodeData then
 				self.to = self.nodes[button.taxiNodeData.slotIndex]
 			else
@@ -728,7 +726,11 @@ do
 			return not not (self.areaID and self.areaID > 0 and self.from and next(self.nodes))
 		end
 
-		function State:Update()
+		---@param forceUpdate? boolean
+		function State:Update(forceUpdate)
+			if not forceUpdate and self:IsValidState() then
+				return
+			end
 			self.areaID, self.from, self.to = GetTaxiMapID(), nil, nil
 			table.wipe(self.nodes)
 			if not self.areaID then
@@ -775,7 +777,7 @@ do
 			---@param manifest AddOnManifest
 			---@param frame Frame
 			OnLoad = function(manifest, frame)
-				frame:HookScript("OnShow", function() State:Update() end)
+				frame:HookScript("OnShow", function() State:Update(true) end)
 				hooksecurefunc(FlightMap_FlightPointPinMixin, "OnMouseEnter", function(...) State:OnEnter(...) end)
 				hooksecurefunc(FlightMap_FlightPointPinMixin, "OnClick", function(...) State:OnClick(...) end)
 			end,
@@ -786,7 +788,7 @@ do
 			---@param manifest AddOnManifest
 			---@param frame Frame
 			OnLoad = function(manifest, frame)
-				frame:HookScript("OnShow", function() State:Update() manifest:OnShow() end)
+				frame:HookScript("OnShow", function() State:Update(true) manifest:OnShow() end)
 			end,
 			---@param manifest AddOnManifest
 			OnShow = function(manifest)
@@ -837,6 +839,52 @@ do
 		AddOn = CreateFrame("Frame") ---@diagnostic disable-line: cast-local-type
 		AddOn:SetScript("OnEvent", OnEvent)
 		AddOn:RegisterEvent("ADDON_LOADED")
+
+	end
+
+	-- TaxiTimerAPI
+	do
+
+		---@class TaxiTimerAPI
+		_G.TaxiTimerAPI = {}
+
+		---@param slotIndex number
+		---@return TaxiNodeInfo?
+		function TaxiTimerAPI.GetNodeFromSlotIndex(slotIndex)
+			for _, node in ipairs(State.nodes) do
+				if node.slotIndex == slotIndex then
+					return node
+				end
+			end
+		end
+
+		---@param toSlotIndex number
+		---@param fromSlotIndex? number
+		---@param areaID? number
+		---@param forceUpdateState? boolean
+		---@return FlightInfo?
+		function TaxiTimerAPI.GetFlightInfo(toSlotIndex, fromSlotIndex, areaID, forceUpdateState)
+			State:Update(forceUpdateState)
+			local from = fromSlotIndex and TaxiTimerAPI.GetNodeFromSlotIndex(fromSlotIndex) or State.from
+			if not from then
+				return
+			end
+			local to = TaxiTimerAPI.GetNodeFromSlotIndex(toSlotIndex)
+			if not to then
+				return
+			end
+			return GetFlightInfo(State.nodes, from, to, areaID)
+		end
+
+		---@param info FlightInfo
+		---@param dropZeroHours? boolean
+		---@return string
+		function TaxiTimerAPI.GetFlightTime(info, dropZeroHours)
+			if dropZeroHours == nil then
+				dropZeroHours = true
+			end
+			return GetTimeStringFromSeconds(info.distance / info.speed, false, dropZeroHours)
+		end
 
 	end
 
