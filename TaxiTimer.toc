@@ -11,5 +11,6 @@
 ## X-AddonProvider: github
 db_vanilla.lua [AllowLoadGameType vanilla]
 db_classic.lua [AllowLoadGameType classic]
-db_mainline.lua [AllowLoadGameType mainline]
+db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
+db_mainline.lua [AllowLoadGameType standard]
 core.lua
