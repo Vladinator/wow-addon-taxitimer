@@ -40,9 +40,9 @@ class TaxiParser {
 			"ID",
 			"PathID",
 			// "NodeIndex",
-			// "ContinentID",
-			// "Flags",
-			// "Delay",
+			"ContinentID",
+			"Flags",
+			"Delay",
 			// "ArrivalEventID",
 			// "DepartureEventID",
 		),
@@ -92,19 +92,41 @@ class TaxiParser {
 			$filename = pathinfo($file, PATHINFO_FILENAME);
 			$filename = mb_strtolower($filename);
 			$headers = array();
+			$rows = array();
 			$items = array();
 
 			if (($fh = fopen($file, "r")) !== false) {
-				while (($item = fgetcsv($fh, 1024, ",")) !== false) {
+				while (($item = fgetcsv($fh, 1024, ",", "\"", "")) !== false) {
 					if (empty($headers)) {
 						$headers = $item;
 					} else {
-						$item = $this->ParseItem($filename, $headers, $item);
-						if ($item && count($item))
-							$items[] = $item;
+						$rows[] = $item;
 					}
 				}
 				fclose($fh);
+			}
+
+			// the dumps are not ordered by flight order, so the points of each path are sorted by their node index
+			// the addon relies on this order (it does not load the node index itself)
+			if ($filename === "taxipathnode") {
+				$pathcol = array_search("PathID", $headers);
+				$indexcol = array_search("NodeIndex", $headers);
+				$idcol = array_search("ID", $headers);
+				if ($pathcol === false || $indexcol === false || $idcol === false) {
+					printf("[%s] unable to sort the path nodes as the PathID, NodeIndex or ID column is missing\r\n", $this->client);
+				} else {
+					usort($rows, function($a, $b) use ($pathcol, $indexcol, $idcol) {
+						return (intval($a[$pathcol]) <=> intval($b[$pathcol]))
+							?: (intval($a[$indexcol]) <=> intval($b[$indexcol]))
+							?: (intval($a[$idcol]) <=> intval($b[$idcol]));
+					});
+				}
+			}
+
+			foreach ($rows as $item) {
+				$item = $this->ParseItem($filename, $headers, $item);
+				if ($item && count($item))
+					$items[] = $item;
 			}
 
 			$this->db[$filename] = array($headers, $items);
@@ -396,11 +418,33 @@ class TaxiParser {
 		return $pdb;
 	}
 
+	private function GetFileLuaLSAnnotation($fileName, $items = false) {
+		$name = "";
+		switch ($fileName) {
+			case "TAXINODES":
+				$name = "TaxiNodesStruct";
+				break;
+			case "TAXIPATH":
+				$name = "TaxiPathStruct";
+				break;
+			case "TAXIPATHNODE":
+				$name = "TaxiPathNodeStruct";
+				break;
+		}
+		if (empty($name)) {
+			return $name;
+		}
+		if ($items) {
+			return "---@type {$name}DB\r\n";
+		}
+		return "---@class {$name}\r\n";
+	}
+
 	// writes the db into a db.lua file
 	public function Write($outfile = __DIR__ . "/db_mainline.lua") {
 		$lua = array();
 		$lua[] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n";
-		$lua[] = "if type(ns) ~= \"table\" then\r\n\tns = {} ---@diagnostic disable-line: missing-fields\r\nend";
+		$lua[] = "ns = ns or {}";
 
 		printf("Writing lua file for %s...\r\n", $this->client);
 
@@ -408,6 +452,7 @@ class TaxiParser {
 			$file = mb_strtolower($file);
 			list ($headers, $items) = $data;
 			$temp = array();
+			$index = 0;
 
 			foreach ($headers as $k => $v) {
 				if (!$this->allfields && array_search($v, $this->fields[$file]) === false)
@@ -417,11 +462,13 @@ class TaxiParser {
 				$v = preg_replace("/[\[]/", "_", $v);
 				$v = preg_replace("/[\[\]]/", "", $v);
 
-				$temp[] = $v . " = " . ($k + 1);
+				// the index is the position among the exported fields (not the csv column) as skipped fields are not written
+				$temp[] = $v . " = " . (++$index);
 			}
 
 			$temp = implode(",\r\n\t", $temp);
-			$lua[] = "\r\nns." . mb_strtoupper($file) . " = {\r\n\t" . $temp . (!empty($temp) ? "," : "-- TODO") . "\r\n}";
+			$fileNameUC = mb_strtoupper($file);
+			$lua[] = "\r\n" . $this->GetFileLuaLSAnnotation($fileNameUC) . "ns." . $fileNameUC . " = {\r\n\t" . $temp . (!empty($temp) ? "," : "-- TODO") . "\r\n}";
 		}
 
 		foreach ($this->db as $file => $data) {
@@ -436,7 +483,8 @@ class TaxiParser {
 				$temp[] = "{" . implode(",", $item) . "}";
 			}
 	
-			$lua[] = "\r\nns." . $file . " = {}";
+			$fileNameUC = mb_strtoupper($file);
+			$lua[] = "\r\n" . $this->GetFileLuaLSAnnotation($fileNameUC, true) . "ns." . $file . " = {}";
 	
 			$chunks = array_chunk($temp, 8192);
 			foreach ($chunks as $cindex => $chunk) {
