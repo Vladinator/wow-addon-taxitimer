@@ -236,6 +236,9 @@ do
 
 		local fallback = setmetatable({
 			[993] = TAXI_SPEED_50, -- Broken Isles
+			[1011] = TAXI_SPEED_40, -- Zandalar
+			[1014] = TAXI_SPEED_40, -- Kul Tiras
+			[1504] = TAXI_SPEED_50, -- Nazjatar
 			[1647] = TAXI_SPEED_40, -- Shadowlands
 			[1922] = TAXI_SPEED_50, -- Draenor
 			[2046] = TAXI_SPEED_50, -- Zereth Mortis
@@ -284,6 +287,11 @@ do
 		local SKIP_POINT_DISTANCE = 40 -- yards (seen from above) around the edges of a path where its points are skipped as we fly past a taxi node without landing
 		local SKIP_POINT_DISTANCE_SQ = SKIP_POINT_DISTANCE * SKIP_POINT_DISTANCE
 
+		local RETRACE_DISTANCE = 100 -- yards (height included) between the points of the path arriving at a taxi node and the path leaving it for the two to run alongside each other
+		local RETRACE_DISTANCE_SQ = RETRACE_DISTANCE * RETRACE_DISTANCE
+		local RETRACE_REACH = 250 -- yards (seen from above) the stretch must reach away from the taxi node, on the path arriving and the path leaving together
+		local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongside the other before that stretch is skipped, fewer are left to the skip distance above
+
 		-- The game changes the flight speed as it passes the points of a path.
 		-- These speeds are not part of the client data, so they come from recorded flights.
 		local TAXI_SPEED_SCALE = (40 + 1/3) / 40
@@ -315,8 +323,10 @@ do
 		---@type table<number, TaxiAreaRamp>
 		local AREA_RAMPS = {
 			[993] = { takeoff = { 15, 30, 40 }, landing = {} }, -- Broken Isles
+			[1011] = { takeoff = { 25, 25 }, landing = { 25, 15 } }, -- Zandalar
+			[1014] = { takeoff = { 25, 25 }, landing = { 25, 15 } }, -- Kul Tiras
 			[1647] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Shadowlands
-			[1922] = { takeoff = { 15, 30, 40 }, landing = { 40, 30 } }, -- Draenor
+			[1922] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- Draenor
 			[2046] = { takeoff = { 25, 30, 40 }, landing = { 40, 30, 25 } }, -- Zereth Mortis
 			[2175] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Zaralek Cavern
 		}
@@ -328,6 +338,7 @@ do
 		---@type table<number, number[][]>
 		local AREA_SPACING = {
 			[993] = { { 60, 15 }, { 100, 30 }, { 130, 40 } }, -- Broken Isles
+			[1922] = { { 80, 20 } }, -- Draenor
 		}
 
 		---@class TaxiPathSegment
@@ -469,6 +480,67 @@ do
 			return IsTeleport(node) or IsStop(node)
 		end
 
+		--- Checks if `node` is close to any of the points of the path `nodes`, height included.
+		---@param node TaxiPathNode
+		---@param nodes TaxiPathNode[]
+		local function IsNearPath(node, nodes)
+			if IsTeleport(node) or IsStop(node) then
+				return false
+			end
+
+			for i = 1, #nodes do
+				local other = nodes[i]
+
+				if other.map == node.map then
+					local dx = other.x - node.x
+					local dy = other.y - node.y
+					local dz = other.z - node.z
+
+					if dx * dx + dy * dy + dz * dz <= RETRACE_DISTANCE_SQ then
+						return true
+					end
+				end
+			end
+
+			return false
+		end
+
+		--- Returns the last point flown of the path arriving at a taxi node and the first point flown of the path leaving it, if the two paths run alongside each other at the node.
+		--- Where the way out of a taxi node goes back along the way in (like Ironforge between Kharanos and Menethil Harbor) the game does not fly in and back out, it flies from where the paths come together to where they part again.
+		---@param arriving TaxiPathNode[]
+		---@param leaving TaxiPathNode[]
+		---@return number? last, number? first
+		local function GetRetrace(arriving, leaving)
+			local numArriving = #arriving
+			local numLeaving = #leaving
+			local last = numArriving
+			local first = 1
+
+			while last > 1 and IsNearPath(arriving[last], leaving) do
+				last = last - 1
+			end
+
+			while first < numLeaving and IsNearPath(leaving[first], arriving) do
+				first = first + 1
+			end
+
+			if numArriving - last < RETRACE_POINTS or first - 1 < RETRACE_POINTS then
+				return
+			end
+
+			-- points circling the taxi node to land or take off are all close to each other without the paths running alongside each other
+			-- so the stretch has to reach away from the node, going by how far out it starts on the two paths together
+			local function GetReach(node, edge)
+				local dx = node.x - edge.x
+				local dy = node.y - edge.y
+				return math.sqrt(dx * dx + dy * dy)
+			end
+
+			if GetReach(arriving[last + 1], arriving[numArriving]) + GetReach(leaving[first - 1], leaving[1]) >= RETRACE_REACH then
+				return last, first
+			end
+		end
+
 		-- Joins the paths of a route into the points that are flown.
 		-- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
 		---@param paths TaxiPathNode[][]
@@ -477,6 +549,17 @@ do
 			local points = {} ---@type TaxiPathNode[]
 			local numPoints = 0
 			local numPaths = #paths
+			local firstFlown = {} ---@type table<number, number> `[pathIndex] = index` of the first point of the path that is flown, if not all of it is
+			local lastFlown = {} ---@type table<number, number> `[pathIndex] = index` of the last point of the path that is flown, if not all of it is
+
+			for pathIndex = 1, numPaths - 1 do
+				local last, first = GetRetrace(paths[pathIndex], paths[pathIndex + 1])
+
+				if last and first then
+					lastFlown[pathIndex] = last
+					firstFlown[pathIndex + 1] = first
+				end
+			end
 
 			for pathIndex = 1, numPaths do
 				local nodes = paths[pathIndex]
@@ -487,7 +570,7 @@ do
 				local last = nodes[numNodes]
 				local hasLeftPreviousPath = false
 
-				for i = 1, numNodes do
+				for i = firstFlown[pathIndex] or 1, lastFlown[pathIndex] or numNodes do
 					local node = nodes[i]
 
 					if hasLeftPreviousPath or isFirst or numPoints == 0 or IsFarFromEdge(points[numPoints], node) then
