@@ -1,5 +1,5 @@
-local SHOW_EXTRA_DEBUG_INFO = true -- enable displaying additional node information on taxi node tooltips
-local RECORD_FLIGHTS = true -- enable recording of paths to SV for later analysis
+local SHOW_EXTRA_DEBUG_INFO = false -- enable displaying additional node information on taxi node tooltips
+local RECORD_FLIGHTS = false -- enable recording of paths to SV for later analysis
 
 local addonName = ... ---@type string
 
@@ -32,16 +32,16 @@ local addonName = ... ---@type string
 ---@field public flags number
 ---@field public delay number The seconds the flight waits at the point if it is flagged as a stop.
 
----A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
+--- A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
 ---@alias TaxiPathRow { [1]: number, [2]: number, [3]: number }
 
----The rows of `ns.taxipath` split up into chunks.
+--- The rows of `ns.taxipath` split up into chunks.
 ---@alias TaxiPathStructDB table<number, TaxiPathRow[]>
 
----A row of `ns.taxipathnode` where the columns are indexed using `ns.TAXIPATHNODE`.
+--- A row of `ns.taxipathnode` where the columns are indexed using `ns.TAXIPATHNODE`.
 ---@alias TaxiPathNodeRow { [1]: number, [2]: number, [3]: number, [4]: number, [5]: number, [6]: number, [7]: number, [8]: number }
 
----The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
+--- The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
 ---@alias TaxiPathNodeStructDB table<number, TaxiPathNodeRow[]>
 
 ---@class taxi_ns_db
@@ -85,7 +85,7 @@ do
 			return p0.x == p1.x and p0.y == p1.y and p0.z == p1.z
 		end
 
-		---Returns the point mirrored across `p1` from `p2`, used as the missing neighbor at either end of a path.
+		--- Returns the point mirrored across `p1` from `p2`, used as the missing neighbor at either end of a path.
 		---@param p1 Point
 		---@param p2 Point
 		---@return Point
@@ -93,7 +93,7 @@ do
 			return { x = 2 * p1.x - p2.x, y = 2 * p1.y - p2.y, z = 2 * p1.z - p2.z }
 		end
 
-		---Returns the points on the curve from `p1` up to (not including) `p2`. The points `p0` and `p3` are the neighbors that shape the curve.
+		--- Returns the points on the curve from `p1` up to (not including) `p2`. The points `p0` and `p3` are the neighbors that shape the curve.
 		---@param p0 Point
 		---@param p1 Point
 		---@param p2 Point
@@ -448,7 +448,7 @@ do
 			return node.delay > 0 and bit.band(node.flags, TAXI_PATH_NODE_FLAG_STOP) ~= 0
 		end
 
-		---Checks if `node` is far enough away from `edge` to be flown when the taxi node at `edge` is passed without landing.
+		--- Checks if `node` is far enough away from `edge` to be flown when the taxi node at `edge` is passed without landing.
 		---@param edge TaxiPathNode
 		---@param node TaxiPathNode
 		local function IsFarFromEdge(edge, node)
@@ -466,10 +466,8 @@ do
 			return IsTeleport(node) or IsStop(node)
 		end
 
-		---Joins the paths of a route into the points that are flown.
-		---
-		---When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
-		---This is the same logic as `FlightPathMovementGenerator::LoadPath` in TrinityCore.
+		--- Joins the paths of a route into the points that are flown.
+		--- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
 		---@param paths TaxiPathNode[][]
 		---@return TaxiPathNode[] points
 		local function JoinTaxiPaths(paths)
@@ -792,7 +790,7 @@ do
 			return nearest, nearestDistance
 		end
 
-		---Returns the index of the point nearest to us among the points ahead of where we were last.
+		--- Returns the index of the point nearest to us among the points ahead of where we were last.
 		---@param flight RecorderFlight
 		---@param x number
 		---@param y number
