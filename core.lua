@@ -26,22 +26,23 @@ local addonName = ... ---@type string
 ---@field public to number
 
 ---@class TaxiPathNode : Point
----@field public pathId number
----@field public id number
----@field public map number The map the point is on (`ContinentID`).
+---@field public pathId number The path id.
+---@field public index number The node index in the path.
+---@field public id number The node id.
+---@field public map number The map the point is on.
 ---@field public flags number
 ---@field public delay number The seconds the flight waits at the point if it is flagged as a stop.
 
---- A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
+-- A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
 ---@alias TaxiPathRow { [1]: number, [2]: number, [3]: number }
 
---- The rows of `ns.taxipath` split up into chunks.
+-- The rows of `ns.taxipath` split up into chunks.
 ---@alias TaxiPathStructDB table<number, TaxiPathRow[]>
 
---- A row of `ns.taxipathnode` where the columns are indexed using `ns.TAXIPATHNODE`.
+-- A row of `ns.taxipathnode` where the columns are indexed using `ns.TAXIPATHNODE`.
 ---@alias TaxiPathNodeRow { [1]: number, [2]: number, [3]: number, [4]: number, [5]: number, [6]: number, [7]: number, [8]: number }
 
---- The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
+-- The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
 ---@alias TaxiPathNodeStructDB table<number, TaxiPathNodeRow[]>
 
 ---@class taxi_ns_db
@@ -85,7 +86,7 @@ do
 			return p0.x == p1.x and p0.y == p1.y and p0.z == p1.z
 		end
 
-		--- Returns the point mirrored across `p1` from `p2`, used as the missing neighbor at either end of a path.
+		-- Returns the point mirrored across `p1` from `p2`, used as the missing neighbor at either end of a path.
 		---@param p1 Point
 		---@param p2 Point
 		---@return Point
@@ -93,7 +94,7 @@ do
 			return { x = 2 * p1.x - p2.x, y = 2 * p1.y - p2.y, z = 2 * p1.z - p2.z }
 		end
 
-		--- Returns the points on the curve from `p1` up to (not including) `p2`. The points `p0` and `p3` are the neighbors that shape the curve.
+		-- Returns the points on the curve from `p1` up to (not including) `p2`. The points `p0` and `p3` are the neighbors that shape the curve.
 		---@param p0 Point
 		---@param p1 Point
 		---@param p2 Point
@@ -150,59 +151,6 @@ do
 			return newPoints, numNewPoints
 		end
 
-		---@param path Point[]
-		---@param ignoreHeight? boolean
-		---@return Point[]? path, number count
-		local function GetCatmulPath(path, ignoreHeight)
-			local numPoints = 0
-			local points = {} ---@type Point[]
-
-			-- a point sharing the position of the point before it adds no distance and would break the curve math
-			for i = 1, #path do
-				local point = path[i]
-
-				if ignoreHeight then
-					point = { x = point.x, y = point.y, z = 0 }
-				end
-
-				if numPoints == 0 or not IsSamePoint(points[numPoints], point) then
-					numPoints = numPoints + 1
-					points[numPoints] = point
-				end
-			end
-
-			if numPoints < 2 then
-				return nil, 0
-			end
-
-			local numNewPath = 0
-			local newPath = {} ---@type Point[]
-
-			for i = 1, numPoints - 1 do
-				local p1 = points[i]
-				local p2 = points[i + 1]
-				local p0 = points[i - 1] or GetMirroredPoint(p1, p2)
-				local p3 = points[i + 2] or GetMirroredPoint(p2, p1)
-				local newPoints, numNewPoints = GetCatmulPoints(p0, p1, p2, p3)
-
-				if newPoints then
-					for j = 1, numNewPoints do
-						numNewPath = numNewPath + 1
-						newPath[numNewPath] = newPoints[j]
-					end
-				else
-					-- without a curve the straight line to the next point is used
-					numNewPath = numNewPath + 1
-					newPath[numNewPath] = p1
-				end
-			end
-
-			numNewPath = numNewPath + 1
-			newPath[numNewPath] = points[numPoints]
-
-			return newPath, numNewPath
-		end
-
 		---@param p0 Point
 		---@param p1 Point
 		---@return number yards
@@ -212,18 +160,57 @@ do
 
 		---@param path Point[]
 		---@param ignoreHeight? boolean `true` to measure the distance as seen from above (the height of the points is ignored)
-		---@return number yards
+		---@return number yards, number[] intervals The yards flown between each point and the next, `intervals[i]` is from `path[i]` to `path[i + 1]`.
 		function CatmulDistance(path, ignoreHeight)
-			local distance = 0
-			local newPath = GetCatmulPath(path, ignoreHeight)
+			local intervals = {} ---@type number[]
+			local numPoints = 0
+			local points = {} ---@type Point[]
+			local origins = {} ---@type number[] the index in `path` of each of the `points`
 
-			if newPath then
-				for i = 2, #newPath do
-					distance = distance + GetDistance(newPath[i - 1], newPath[i])
+			-- a point sharing the position of the point before it adds no distance and would break the curve math
+			for i = 1, #path do
+				local point = path[i]
+
+				if ignoreHeight then
+					point = { x = point.x, y = point.y, z = 0 }
+				end
+
+				if i > 1 then
+					intervals[i - 1] = 0
+				end
+
+				if numPoints == 0 or not IsSamePoint(points[numPoints], point) then
+					numPoints = numPoints + 1
+					points[numPoints] = point
+					origins[numPoints] = i
 				end
 			end
 
-			return distance
+			local distance = 0
+
+			for i = 1, numPoints - 1 do
+				local p1 = points[i]
+				local p2 = points[i + 1]
+				local p0 = points[i - 1] or GetMirroredPoint(p1, p2)
+				local p3 = points[i + 2] or GetMirroredPoint(p2, p1)
+				local newPoints, numNewPoints = GetCatmulPoints(p0, p1, p2, p3)
+				local interval = 0
+				local previous = p1
+
+				-- without a curve the straight line to the next point is used
+				if newPoints then
+					for j = 1, numNewPoints do
+						interval = interval + GetDistance(previous, newPoints[j])
+						previous = newPoints[j]
+					end
+				end
+
+				interval = interval + GetDistance(previous, p2)
+				intervals[origins[i + 1] - 1] = interval
+				distance = distance + interval
+			end
+
+			return distance, intervals
 		end
 
 	end
@@ -245,15 +232,17 @@ do
 
 		local TAXI_SPEED_FALLBACK = 30+1/3
 		local TAXI_SPEED_40 = 40+1/3
-		local TAXI_SPEED_50 = 50+7/9
-		local TAXI_SPEED_55 = 55
+		local TAXI_SPEED_50 = 50+5/12
 
 		local fallback = setmetatable({
 			[1116] = TAXI_SPEED_40, -- Draenor
-			[1220] = TAXI_SPEED_40, -- Broken Isles
+			[993] = TAXI_SPEED_50, -- Broken Isles
 			[1647] = TAXI_SPEED_40, -- Shadowlands
-			[2444] = TAXI_SPEED_50, -- Dragon Isles
-			[2276] = TAXI_SPEED_55, -- Khaz Algar
+			[2046] = TAXI_SPEED_50, -- Zereth Mortis
+			[2057] = TAXI_SPEED_50, -- Dragon Isles
+			[2175] = TAXI_SPEED_40, -- Zaralek Cavern
+			[2241] = TAXI_SPEED_50, -- Emerald Dream
+			[2276] = TAXI_SPEED_50, -- Khaz Algar
 		}, {
 			__index = function()
 				return TAXI_SPEED_FALLBACK
@@ -285,7 +274,9 @@ do
 
 	end
 
-	local GetPointsFromNodes do
+	local GetPointsFromNodes
+	local GetPointSpeeds
+	local GetSpacingSpeed do
 
 		local TAXI_PATH_NODE_FLAG_TELEPORT = 0x1 -- the flight continues at the next point without flying the distance between
 		local TAXI_PATH_NODE_FLAG_STOP = 0x2 -- the flight waits at this point for the amount of seconds in the delay field
@@ -293,46 +284,56 @@ do
 		local SKIP_POINT_DISTANCE = 40 -- yards (seen from above) around the edges of a path where its points are skipped as we fly past a taxi node without landing
 		local SKIP_POINT_DISTANCE_SQ = SKIP_POINT_DISTANCE * SKIP_POINT_DISTANCE
 
-		local SHADOWLANDS_SPEED = Speed(1647)
-		local SHADOWLANDS_WARP_SPEED = 200 -- estimation
-		local SHADOWLANDS_ORIBOS_LIGHTSPEED_PADDING_DISTANCE = SHADOWLANDS_WARP_SPEED*40 -- estimation
-		local SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
-		local SHADOWLANDS_ORIBOS_BASTION_DISTANCE = SHADOWLANDS_SPEED*75
-		local SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
-		local SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE = SHADOWLANDS_SPEED*80 -- ?
+		-- The game changes the flight speed as it passes the points of a path.
+		-- These speeds are not part of the client data, so they come from recorded flights.
+		local TAXI_SPEED_SCALE = (40 + 1/3) / 40
 
-		---@class TaxiPathOverride
-		---@field public distance number The distance used for the path instead of the distance between its points.
-		---@field public speed number The speed used for the path instead of the speed of the area.
+		-- The speed flown from a point of a path until a later point of the path changes it, as `[pathId] = { [point index] = speed }`.
+		-- The first point of a path must have a speed.
+		---@type table<number, table<number, number>>
+		local PATH_SPEEDS = {
+			[7916] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 30 }, -- Oribos > Pridefall Hamlet, Revendreth
+			[7917] = { [1] = 15, [2] = 25, [3] = 40, [4] = 65, [5] = 100, [6] = 300, [11] = 100, [12] = 65, [13] = 40, [14] = 25 }, -- Pridefall Hamlet, Revendreth > Oribos
+			[8012] = { [1] = 15, [2] = 30, [3] = 50, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 25 }, -- Aspirant's Rest, Bastion > Oribos
+			[8013] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [8] = 300, [14] = 100, [17] = 65, [18] = 40, [19] = 25 }, -- Oribos > Aspirant's Rest, Bastion
+			[8318] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [7] = 300, [14] = 100, [15] = 65, [16] = 55, [17] = 50, [20] = 45, [21] = 40, [23] = 25 }, -- Oribos > Theater of Pain, Maldraxxus
+			[8319] = { [1] = 15, [2] = 25, [3] = 40, [4] = 50, [8] = 65, [10] = 300, [17] = 100, [18] = 65, [20] = 40, [21] = 25 }, -- Theater of Pain, Maldraxxus > Oribos
+			[8431] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [7] = 100, [8] = 300, [10] = 250, [11] = 200, [12] = 100, [14] = 40, [22] = 25 }, -- Oribos > Tirna Vaal, Ardenweald
+			[8432] = { [1] = 10, [2] = 25, [3] = 40, [11] = 65, [13] = 100, [14] = 300, [16] = 250, [17] = 200, [18] = 100, [20] = 65, [22] = 40, [23] = 25 }, -- Tirna Vaal, Ardenweald > Oribos
+			[8557] = { [1] = 25, [2] = 35, [3] = 45, [4] = 70, [5] = 100, [8] = 300, [15] = 155, [16] = 60, [17] = 40, [18] = 25 }, -- Oribos > Tazavesh, the Veiled Market
+			[8558] = { [1] = 25, [2] = 50, [4] = 300, [11] = 100, [13] = 65, [14] = 50, [15] = 45, [16] = 25 }, -- Tazavesh, the Veiled Market > Oribos
+			[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
+			[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps
+		}
 
-		---@param distance number
-		---@return TaxiPathOverride
-		local function ShadowlandsOverride(distance)
-			return {
-				distance = distance + SHADOWLANDS_ORIBOS_LIGHTSPEED_PADDING_DISTANCE,
-				speed = (SHADOWLANDS_SPEED + SHADOWLANDS_WARP_SPEED)/2,
-			}
-		end
+		---@class TaxiAreaRamp
+		---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
+		---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
 
-		-- paths where the points do not reflect the flight at all, these are timed on their own and do not blend into the paths before and after
-		---@type table<number, TaxiPathOverride>
-		local PATH_OVERRIDE = {
-			[7916] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE), -- Oribos > Revendreth, Pridefall Hamlet
-			[7917] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_REVENDRETH_DISTANCE), -- Revendreth, Pridefall Hamlet > Oribos
-			[8013] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_BASTION_DISTANCE), -- Oribos > Bastion, Aspirant's Rest
-			[8012] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_BASTION_DISTANCE), -- Bastion, Aspirant's Rest > Oribos
-			[8318] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE), -- Oribos > Maldraxxus, Theater of Pain
-			[8319] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_MALDRAXXUS_DISTANCE), -- Maldraxxus, Theater of Pain > Oribos
-			[8431] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE), -- Oribos > Ardenweald, Tirna Vaal
-			[8432] = ShadowlandsOverride(SHADOWLANDS_ORIBOS_ARDENWEALD_DISTANCE), -- Ardenweald, Tirna Vaal > Oribos
+		-- Taxi maps where flights speed up after taking off and slow down before landing.
+		-- Paths in `PATH_SPEEDS` have their own speeds and do not use these.
+		---@type table<number, TaxiAreaRamp>
+		local AREA_RAMPS = {
+			[993] = { takeoff = { 15, 30, 40 }, landing = {} }, -- Broken Isles
+			[1647] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Shadowlands
+			[2046] = { takeoff = { 25, 30, 40 }, landing = { 40, 30, 25 } }, -- Zereth Mortis
+			[2175] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Zaralek Cavern
+		}
+
+		-- Taxi maps where the flight is slower the closer the points are to each other, as `{ yards, speed }` in rising order:
+		-- a stretch between two points shorter than the yards is flown at the speed.
+		-- This is what fits the recorded flights best, the game does not tell us why it flies slower there.
+		-- Stretches with a speed from `PATH_SPEEDS` or `AREA_RAMPS` do not use these.
+		---@type table<number, number[][]>
+		local AREA_SPACING = {
+			[993] = { { 60, 15 }, { 100, 30 }, { 130, 40 } }, -- Broken Isles
 		}
 
 		---@class TaxiPathSegment
 		---@field public points TaxiPathNode[]
-		---@field public override? TaxiPathOverride
 		---@field public distance? number The yards flown.
 		---@field public distance2D? number The yards flown as seen from above.
-		---@field public speed? number The speed in yards per second.
+		---@field public speed? number The average speed in yards per second.
 
 		local hasLookup = false
 		local pathLookup = {} ---@type table<number, table<number, number>> `[from][to] = pathId`
@@ -407,6 +408,7 @@ do
 							z = row[TAXIPATHNODE.LOC_2],
 							id = row[TAXIPATHNODE.ID],
 							pathId = pathId,
+							index = i,
 							map = row[TAXIPATHNODE.CONTINENTID],
 							flags = row[TAXIPATHNODE.FLAGS],
 							delay = row[TAXIPATHNODE.DELAY],
@@ -448,7 +450,7 @@ do
 			return node.delay > 0 and bit.band(node.flags, TAXI_PATH_NODE_FLAG_STOP) ~= 0
 		end
 
-		--- Checks if `node` is far enough away from `edge` to be flown when the taxi node at `edge` is passed without landing.
+		-- Checks if `node` is far enough away from `edge` to be flown when the taxi node at `edge` is passed without landing.
 		---@param edge TaxiPathNode
 		---@param node TaxiPathNode
 		local function IsFarFromEdge(edge, node)
@@ -466,8 +468,8 @@ do
 			return IsTeleport(node) or IsStop(node)
 		end
 
-		--- Joins the paths of a route into the points that are flown.
-		--- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
+		-- Joins the paths of a route into the points that are flown.
+		-- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
 		---@param paths TaxiPathNode[][]
 		---@return TaxiPathNode[] points
 		local function JoinTaxiPaths(paths)
@@ -526,18 +528,13 @@ do
 			local segment ---@type TaxiPathSegment?
 			local delay = 0
 
-			-- the points are split up where the flight doesn't fly from one point to the next (teleports and map changes) and where a path is timed on its own
+			-- the points are split up where the flight doesn't fly from one point to the next (teleports and map changes)
 			for i = 1, #points do
 				local point = points[i]
 				local previous = points[i - 1]
-				local override = PATH_OVERRIDE[point.pathId]
 
-				if not segment
-					or segment.override ~= override
-					or (override and previous.pathId ~= point.pathId)
-					or (not override and (previous.map ~= point.map or IsTeleport(previous)))
-				then
-					segment = { points = {}, override = override }
+				if not segment or previous.map ~= point.map or IsTeleport(previous) then
+					segment = { points = {} }
 					segments[#segments + 1] = segment
 				end
 
@@ -551,9 +548,87 @@ do
 			return points, segments, delay
 		end
 
+		-- Returns the speed a path is flown at from the given point, if the path has its own speeds.
+		---@param point TaxiPathNode
+		---@return number? speed
+		local function GetPathSpeed(point)
+			local speeds = PATH_SPEEDS[point.pathId]
+
+			if not speeds then
+				return
+			end
+
+			-- the speed last set at or before the point, as the points before it can have been skipped
+			for i = point.index, 1, -1 do
+				local speed = speeds[i]
+
+				if speed then
+					return speed * TAXI_SPEED_SCALE
+				end
+			end
+		end
+
+		-- Returns the speed flown from each of the points to the next.
+		---@param points TaxiPathNode[]
+		---@param areaID? number
+		---@return (number|false)[] speeds, boolean isDynamic `true` if the speed changes during the flight. The speed is `false` for the points that leave it to the taxi map.
+		function GetPointSpeeds(points, areaID)
+			local speeds = {} ---@type (number|false)[]
+			local numPoints = #points
+			local ramp = areaID and AREA_RAMPS[areaID]
+			local isDynamic = false
+
+			for i = 1, numPoints do
+				local speed = GetPathSpeed(points[i])
+
+				if not speed and ramp then
+					local takeoff = ramp.takeoff[i]
+					local landing = ramp.landing[#ramp.landing - (numPoints - 1 - i)]
+
+					if i < numPoints and (landing or takeoff) then
+						speed = (landing or takeoff) * TAXI_SPEED_SCALE
+					end
+				end
+
+				if speed then
+					isDynamic = true
+				end
+
+				speeds[i] = speed or false
+			end
+
+			return speeds, isDynamic
+		end
+
+		-- Returns the speed a stretch between two points is flown at going by its length, if the taxi map flies slower where the points are close.
+		---@param areaID? number
+		---@param yards number
+		---@return number? speed
+		function GetSpacingSpeed(areaID, yards)
+			local spacing = areaID and AREA_SPACING[areaID]
+
+			if not spacing then
+				return
+			end
+
+			for i = 1, #spacing do
+				local step = spacing[i]
+
+				if yards < step[1] then
+					return step[2] * TAXI_SPEED_SCALE
+				end
+			end
+		end
+
 	end
 
-	local GetFlightInfo do
+	local GetFlightInfo, GetFlightTimeLeft do
+
+		---@class FlightStep
+		---@field public distance number The yards flown between a point and the next.
+		---@field public speed number The speed in yards per second it is flown at.
+		---@field public distanceLeft number The yards left of the flight after it.
+		---@field public durationLeft number The seconds left of the flight after it.
 
 		---@class FlightInfo
 		---@field public distance number The yards flown.
@@ -565,6 +640,8 @@ do
 		---@field public nodes TaxiNodeInfo[]
 		---@field public points TaxiPathNode[]
 		---@field public segments TaxiPathSegment[]
+		---@field public steps FlightStep[] The stretches between the points in the order they are flown.
+		---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
 		---@field public donotadjustarrivaltime? boolean
 
 		local DO_NOT_ADJUST_FOR_MAPS = {
@@ -586,6 +663,9 @@ do
 			local slotIndex = to.slotIndex
 			---@type number
 			local numRoutes = GetNumRoutes(slotIndex) ---@diagnostic expect-line: assign-type-mismatch
+			if type(numRoutes) ~= "number" then
+				return -- the taxi map is not open
+			end
 			for routeIndex = 1, numRoutes do
 				---@type number
 				local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic expect-line: assign-type-mismatch, redundant-parameter
@@ -606,23 +686,44 @@ do
 			end
 			local points, segments, delay = GetPointsFromNodes(nodes)
 			local areaSpeed = Speed(areaID)
+			local speeds, isDynamic = GetPointSpeeds(points, areaID)
+			local steps = {} ---@type FlightStep[]
+			local numSteps = 0
+			local numPoints = 0
 			local distance = 0
 			local distance2D = 0
 			local duration = 0
-			-- each segment is timed on its own as they do not all share the same speed
+			-- each stretch between two points is timed on its own as they do not all share the same speed
 			for i = 1, #segments do
 				local segment = segments[i]
-				local override = segment.override
-				local segmentDistance, segmentDistance2D, segmentSpeed
-				if override then
-					segmentDistance, segmentDistance2D, segmentSpeed = override.distance, override.distance, override.speed
-				else
-					segmentDistance, segmentDistance2D, segmentSpeed = CatmulDistance(segment.points), CatmulDistance(segment.points, true), areaSpeed
+				local segmentDistance, intervals = CatmulDistance(segment.points)
+				local segmentDistance2D = CatmulDistance(segment.points, true)
+				local segmentDuration = 0
+				for j = 1, #intervals do
+					local speed = speeds[numPoints + j] or GetSpacingSpeed(areaID, intervals[j])
+					if speed then
+						isDynamic = true
+					else
+						speed = areaSpeed
+					end
+					numSteps = numSteps + 1
+					steps[numSteps] = { distance = intervals[j], speed = speed, distanceLeft = 0, durationLeft = 0 }
+					segmentDuration = segmentDuration + intervals[j] / speed
 				end
-				segment.distance, segment.distance2D, segment.speed = segmentDistance, segmentDistance2D, segmentSpeed
+				numPoints = numPoints + #segment.points
+				segment.distance, segment.distance2D, segment.speed = segmentDistance, segmentDistance2D, segmentDuration > 0 and segmentDistance / segmentDuration or areaSpeed
 				distance = distance + segmentDistance
 				distance2D = distance2D + segmentDistance2D
-				duration = duration + segmentDistance / segmentSpeed
+				duration = duration + segmentDuration
+			end
+			-- what is left of the flight once each stretch has been flown
+			local distanceLeft = 0
+			local durationLeft = 0
+			for i = numSteps, 1, -1 do
+				local step = steps[i]
+				step.distanceLeft, step.durationLeft = distanceLeft, durationLeft
+				distanceLeft = distanceLeft + step.distance
+				durationLeft = durationLeft + step.distance / step.speed
 			end
 			if distance > 0 and duration > 0 then
 				---@type FlightInfo
@@ -636,6 +737,8 @@ do
 					nodes = nodes,
 					points = points,
 					segments = segments,
+					steps = steps,
+					dynamicSpeed = isDynamic,
 				}
 				if INCLUDE_STOP_DELAYS then
 					info.duration = info.duration + delay
@@ -645,11 +748,27 @@ do
 			end
 		end
 
+		-- Returns the seconds left of the flight when the given yards are left of it, going by the speed of each stretch.
+		---@param info FlightInfo
+		---@param distance number
+		---@return number seconds
+		function GetFlightTimeLeft(info, distance)
+			local steps = info.steps
+			for i = 1, #steps do
+				local step = steps[i]
+				if distance >= step.distanceLeft then
+					return step.durationLeft + math.min(distance - step.distanceLeft, step.distance) / step.speed
+				end
+			end
+			return 0
+		end
+
 	end
 
 	ns.Speed = Speed
 	ns.GetPointsFromNodes = GetPointsFromNodes
 	ns.GetFlightInfo = GetFlightInfo
+	ns.GetFlightTimeLeft = GetFlightTimeLeft
 
 end
 
@@ -658,6 +777,7 @@ do
 
 	local Speed = ns.Speed
 	local GetFlightInfo = ns.GetFlightInfo
+	local GetFlightTimeLeft = ns.GetFlightTimeLeft
 
 	---@param timeAmount number
 	---@param asMs? boolean
@@ -711,8 +831,8 @@ do
 		---@field public last number Index in `points` of the last point of the segment.
 		---@field public distance number Yards the segment was estimated to be.
 		---@field public distance2D number Yards the segment was estimated to be as seen from above.
-		---@field public speed number Speed the segment was estimated to be flown at.
-		---@field public override boolean If the distance and speed are from a path override and not from the points.
+		---@field public speed number Average speed the segment was estimated to be flown at.
+		---@field public override boolean Always `false`, older versions set it for paths with a made up distance and speed.
 
 		---@class FlightRecord
 		---@field public version number Format of the record.
@@ -790,7 +910,7 @@ do
 			return nearest, nearestDistance
 		end
 
-		--- Returns the index of the point nearest to us among the points ahead of where we were last.
+		-- Returns the index of the point nearest to us among the points ahead of where we were last.
 		---@param flight RecorderFlight
 		---@param x number
 		---@param y number
@@ -845,7 +965,7 @@ do
 					distance = Round(segment.distance, 1),
 					distance2D = Round(segment.distance2D, 1),
 					speed = Round(segment.speed, 2),
-					override = segment.override ~= nil,
+					override = false,
 				}
 				numPoints = numPoints + #segment.points
 			end
@@ -965,7 +1085,13 @@ do
 		---@field public waitingOnTaxi number
 		---@field public timeCorrection? GPSInfoTimeCorrection
 		---@field public distance? number
+		---@field public timeLeft? number
+		---@field public lastOnTaxi? number `GetTime()` when we were last seen on the flight.
+		---@field public lastMapID? number The map we were on when last seen on the flight.
+		---@field public earlyLanding? boolean If we asked to land early at the next taxi node.
 
+		local TAXI_MAX_MAP_CHANGE = 30 -- seconds we wait for a flight to carry on after it left the taxi on its way to another map (the game takes us off the taxi while the next map loads)
+		local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards that must be left of the flight for it to be on its way to another map and not at its destination
 		local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
 
 		local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
@@ -979,6 +1105,27 @@ do
 		local Ticker ---@type FunctionContainer?
 
 		GPS = {}
+
+		-- Checks if we left the taxi because the flight is changing to the map of its destination, and not because the flight ended.
+		---@param info FlightInfo
+		---@return boolean
+		local function IsChangingMap(info)
+			local gps = GPSInfo
+			if not gps or gps.earlyLanding or not gps.lastOnTaxi or not gps.lastMapID or not gps.distance then
+				return false
+			end
+			local destination = info.points[#info.points]
+			return destination ~= nil and destination.map ~= gps.lastMapID and gps.distance > TAXI_MAX_MAP_CHANGE_DISTANCE and GetTime() - gps.lastOnTaxi < TAXI_MAX_MAP_CHANGE
+		end
+
+		-- asking to land early ends the flight at the next taxi node, which can be on a map before the one of the destination
+		if TaxiRequestEarlyLanding then
+			hooksecurefunc("TaxiRequestEarlyLanding", function()
+				if GPSInfo then
+					GPSInfo.earlyLanding = true
+				end
+			end)
+		end
 
 		---@param state State
 		---@param info FlightInfo
@@ -999,6 +1146,7 @@ do
 			}
 			-- our position is tracked as seen from above, so what we travel is scaled to match the flight distance that includes climbing and descending
 			local travelScale = info.distance2D > 0 and info.distance / info.distance2D or 1
+			local areaSpeed = Speed(state.areaID)
 			Ticker = C_Timer.NewTicker(0.5, function()
 				if not GPSInfo.distance then
 					GPSInfo.distance = info.distance
@@ -1012,6 +1160,7 @@ do
 				end
 				if UnitOnTaxi("player") then
 					GPSInfo.wasOnTaxi = true
+					GPSInfo.lastOnTaxi = GetTime()
 					GPSInfo.speed = Speed(state.areaID, true)
 					GPSInfo.x, GPSInfo.y, GPSInfo.z, GPSInfo.mapID = UnitPosition("player")
 					if GPSInfo.lastSpeed then
@@ -1023,6 +1172,11 @@ do
 							GPSInfo.distancePercent = GPSInfo.distance / info.distance
 							if GPSInfo.distance > 0 and GPSInfo.speed > 0 then
 								local timeCorrection = TAXI_TIME_CORRECT
+								-- the time left goes by the speed of each stretch that is left, and if the whole flight is at one speed also by how much faster than expected we fly
+								GPSInfo.timeLeft = GetFlightTimeLeft(info, GPSInfo.distance)
+								if not info.dynamicSpeed then
+									GPSInfo.timeLeft = GPSInfo.timeLeft * areaSpeed / GPSInfo.speed
+								end
 								-- DEBUG: current progress
 								-- DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", GPSInfo.distance, GPSInfo.distancePercent * 100), 1, 1, 0)
 								local gpsInfoTimeCorrection = GPSInfo.timeCorrection
@@ -1034,7 +1188,7 @@ do
 										timeCorrection = true
 										-- set next checkpoint, and calculate time difference
 										gpsInfoTimeCorrection.progress = gpsInfoTimeCorrection.progress - gpsInfoTimeCorrection.chunk
-										gpsInfoTimeCorrection.difference = math.floor(Timer:Get() - (GPSInfo.distance / GPSInfo.speed))
+										gpsInfoTimeCorrection.difference = math.floor(Timer:Get() - GPSInfo.timeLeft)
 										-- check if time difference is within acceptable boundaries
 										if TAXI_TIME_CORRECT_IGNORE > 0 and abs(gpsInfoTimeCorrection.difference) < TAXI_TIME_CORRECT_IGNORE then
 											timeCorrection = false
@@ -1048,8 +1202,10 @@ do
 									end
 								end
 								-- set or override the stopwatch based on time correction mode
-								if not info.donotadjustarrivaltime then
-									Timer:Start(GPSInfo.distance / GPSInfo.speed, timeCorrection)
+								-- a stopwatch that ran out before we landed is only started again if there is a good while left, or
+								-- it would start over and ring again and again as we come in to land
+								if not info.donotadjustarrivaltime and (timeCorrection or not GPSInfo.stopwatchSet or GPSInfo.timeLeft > TAXI_TIME_CORRECT_IGNORE) then
+									Timer:Start(GPSInfo.timeLeft, timeCorrection)
 								end
 								-- stopwatch was set at least once
 								GPSInfo.stopwatchSet = true
@@ -1062,6 +1218,9 @@ do
 				elseif not GPSInfo.wasOnTaxi then
 					Recorder:Idle()
 					GPSInfo.wasOnTaxi = GetTime() - GPSInfo.waitingOnTaxi > TAXI_MAX_SLEEP
+				elseif IsChangingMap(info) then
+					-- the flight carries on once the next map has loaded
+					GPSInfo.lastX = nil
 				elseif GPSInfo.wasOnTaxi then
 					Recorder:Stop()
 					-- announce the time adjustments, if any
@@ -1276,17 +1435,16 @@ do
 		---@param slotIndex number
 		---@return TaxiNodeInfo?
 		function TaxiTimerAPI.GetNodeFromSlotIndex(slotIndex)
-			for _, node in ipairs(State.nodes) do
-				if node.slotIndex == slotIndex then
-					return node
-				end
+			if type(slotIndex) ~= "number" then
+				return
 			end
+			return State.nodes[slotIndex]
 		end
 
 		---@param toSlotIndex number
-		---@param fromSlotIndex? number
-		---@param areaID? number
-		---@param forceUpdateState? boolean
+		---@param fromSlotIndex? number Only if you wish to check the travel time from another starting node.
+		---@param areaID? number Only if you know you wish to override calculations with another areaID than the current TaxiMap provided one.
+		---@param forceUpdateState? boolean Only if you know the state is stale, otherwise the addon refreshes it as the TaxiMap opens.
 		---@return FlightInfo?
 		function TaxiTimerAPI.GetFlightInfo(toSlotIndex, fromSlotIndex, areaID, forceUpdateState)
 			State:Update(forceUpdateState)
@@ -1298,17 +1456,32 @@ do
 			if not to then
 				return
 			end
-			return GetFlightInfo(State.nodes, from, to, areaID)
+			return GetFlightInfo(State.nodes, from, to, areaID or State.areaID)
 		end
 
-		---@param info FlightInfo
+		---@param info? FlightInfo
 		---@param dropZeroHours? boolean
-		---@return string
+		---@return string?
 		function TaxiTimerAPI.GetFlightTime(info, dropZeroHours)
+			if type(info) ~= "table" then
+				return
+			end
+			local duration = info.duration
+			local distance = info.distance
+			local speed = info.speed
+			if type(duration) ~= "number" then
+				if type(distance) ~= "number" or type(speed) ~= "number" or speed <= 0 then
+					return
+				end
+				duration = distance / speed
+			end
+			if duration ~= duration or duration < 0 or duration == math.huge then
+				return
+			end
 			if dropZeroHours == nil then
 				dropZeroHours = true
 			end
-			return GetTimeStringFromSeconds(info.duration or info.distance / info.speed, false, dropZeroHours)
+			return GetTimeStringFromSeconds(duration, false, dropZeroHours)
 		end
 
 	end
