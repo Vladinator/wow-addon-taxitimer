@@ -16,7 +16,6 @@
     ],
     "Lua.workspace.ignoreDir": [
         ".vscode",
-        "scripts",
         "db_*.lua"
     ],
     "Lua.diagnostics.disable": [

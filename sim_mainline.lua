@@ -4,8 +4,9 @@ ns = ns or {}
 
 -- What the flights of this game were measured to do, on top of what the taxi data says. Each game has a file like this of its own, as the flights of one do not have to fly like those of another.
 -- The speeds are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
--- Record flights and run `scripts/analyze.php` to see what to add, change or remove here. It reads these tables, so they need to keep their names and layout.
+-- Record flights and run `scripts/analyze.lua` to see what to add, change or remove here. It reads these tables, so they need to keep their names and layout.
 
+-- The game the `sim_` file that was loaded is for.
 ns.FLAVOR = "mainline"
 
 -- If the stretch where the path arriving at a taxi node and the path leaving it run alongside each other is skipped when flying past the node (like Ironforge between Kharanos and Menethil Harbor).
@@ -24,6 +25,11 @@ ns.AREA_SPEEDS = {
 	[2175] = 40, -- Zaralek Cavern
 	[2241] = 50, -- Emerald Dream
 	[2276] = 50, -- Khaz Algar
+}
+
+-- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
+ns.AREA_FIXED_TIME = {
+	[2276] = true, -- Khaz Algar
 }
 
 -- Taxi maps where flights speed up after taking off and slow down before landing.

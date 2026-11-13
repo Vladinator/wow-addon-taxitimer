@@ -1,0 +1,573 @@
+-- Compares what was flown to what the sim file of a game has, and says what to change in it.
+-- The estimates are made by the simulation of the addon itself, with the tables of the sim file changed for a moment to see what they would be with other speeds.
+
+---A flight the speeds of a taxi map are tried on.
+---@class SuggestFlight
+---@field index number The number of the flight among the recorded ones.
+---@field analysis FlightAnalysis
+---@field geometry FlightGeometry
+---@field intervals FlownStretch[]
+---@field seconds number How long the flight took, without the time spent loading.
+
+---The speeds by the length of a stretch as `{ yards, speed }` in rising order.
+---@alias SuggestSpacing number[][]
+
+---The tables of the simulation that are changed for a moment.
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"PATH_SPEEDS"
+
+---@param ctx AnalysisContext
+---@return fun(analyses: FlightAnalysis[], simFile?: string)
+return function(ctx)
+	local util = ctx.util
+	local fmt, concat = string.format, table.concat
+	local abs, max, min = math.abs, math.max, math.min
+	local printf = util.printf
+
+	local SPACING_YARDS = { 30, 45, 60, 80, 100, 130, 170, 220, 300 } -- the lengths a stretch between two points is sorted by when looking for the speed it is flown at
+	local SPACING_MIN_FLIGHTS = 5 -- flights needed on a taxi map before speeds by the length of the stretches are suggested for it
+	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
+	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
+	local RAMP_MIN_SECONDS = 0.25 -- seconds the flights must get closer to their estimates on average before other speeds for taking off and landing are suggested
+
+	-- Changing the tables of the simulation for a moment ----------------------------------------------------------------
+
+	-- sets `ns[name][key]` and returns what puts it back
+	---@param ns taxi_ns_db
+	---@param name SuggestTable
+	---@param key number
+	---@param value any
+	---@return fun() restore Puts back what it was.
+	local function override(ns, name, key, value)
+		local created = false
+		local tbl = ns[name]
+		if not tbl then
+			tbl = {}
+			ns[name] = tbl
+			created = true
+		end
+		local old = tbl[key]
+		tbl[key] = value
+		return function()
+			tbl[key] = old
+			if created then
+				ns[name] = nil
+			end
+		end
+	end
+
+	-- Models -------------------------------------------------------------------------------------------------------------------
+
+	-- how far off the estimates of the flights are with the tables the simulation has now, as the seconds on average and at worst
+	---@param ns taxi_ns_db
+	---@param area number The taxi map.
+	---@param flights SuggestFlight[]
+	---@return number average
+	---@return number worst
+	local function modelError(ns, area, flights)
+		local sum, worst, count = 0, 0, 0
+		for _, flight in ipairs(flights) do
+			local info = ns.GetFlightInfoFromGeometry(flight.geometry, area)
+			if info then
+				local err = abs(flight.seconds - info.duration)
+				sum = sum + err
+				worst = max(worst, err)
+				count = count + 1
+			end
+		end
+		if count == 0 then
+			return 0, 0
+		end
+		return sum / count, worst
+	end
+
+	---@param speeds number[] The speed for each of `SPACING_YARDS`.
+	---@param cruise number
+	---@return SuggestSpacing
+	local function spacingFromSpeeds(speeds, cruise)
+		local spacing = {}
+		for i, yards in ipairs(SPACING_YARDS) do
+			if speeds[i] < cruise and (not speeds[i + 1] or speeds[i + 1] ~= speeds[i]) then
+				spacing[#spacing + 1] = { yards, speeds[i] }
+			end
+		end
+		return spacing
+	end
+
+	-- the speeds by the length of the stretches that bring the estimates of the flights closest to how long they took
+	---@param ns taxi_ns_db
+	---@param area number
+	---@param flights SuggestFlight[]
+	---@param cruise number
+	---@return SuggestSpacing
+	local function fitSpacing(ns, area, flights, cruise)
+		local speeds = {}
+		for i = 1, #SPACING_YARDS do
+			speeds[i] = cruise
+		end
+		local function cost(candidate)
+			local restore = override(ns, "AREA_SPACING", area, spacingFromSpeeds(candidate, cruise))
+			local average, worst = modelError(ns, area, flights)
+			restore()
+			return average + 0.15 * worst
+		end
+		local best = cost(speeds)
+		repeat
+			local improved = false
+			for i = 1, #SPACING_YARDS do
+				for speed = 10, cruise, 5 do
+					-- shorter stretches are never flown faster than longer ones
+					local try = {}
+					for j, value in ipairs(speeds) do
+						try[j] = j <= i and min(value, speed) or max(value, speed)
+					end
+					try[i] = speed
+					local value = cost(try)
+					if value < best - 0.000001 then
+						best = value
+						speeds = try
+						improved = true
+					end
+				end
+			end
+		until not improved
+		return spacingFromSpeeds(speeds, cruise)
+	end
+
+	---@param spacing SuggestSpacing
+	---@return string
+	local function spacingList(spacing)
+		local parts = {}
+		for _, step in ipairs(spacing) do
+			parts[#parts + 1] = fmt("{ %d, %d }", step[1], step[2])
+		end
+		return concat(parts, ", ")
+	end
+
+	---@param a SuggestSpacing
+	---@param b SuggestSpacing
+	---@return boolean
+	local function sameSpacing(a, b)
+		if #a ~= #b then
+			return false
+		end
+		for i = 1, #a do
+			if a[i][1] ~= b[i][1] or a[i][2] ~= b[i][2] then
+				return false
+			end
+		end
+		return true
+	end
+
+	-- the speed flown from each of the points first to last, given the speeds set at some of them
+	---@param speeds table<number, number> The speeds by the point they are set at.
+	---@param first number
+	---@param last number
+	---@return table<number, number> spread The speed flown from each point.
+	local function spreadSpeeds(speeds, first, last)
+		local points = util.keys(speeds)
+		local speed = 0
+		for _, point in ipairs(points) do
+			if point <= first then
+				speed = speeds[point]
+			end
+		end
+		local spread = {}
+		for point = first, last do
+			if speeds[point] then
+				speed = speeds[point]
+			end
+			spread[point] = speed
+		end
+		return spread
+	end
+
+	---@param a table<number, number>?
+	---@param b table<number, number>?
+	---@return boolean
+	local function sameSpread(a, b)
+		if not a or not b then
+			return false
+		end
+		for point, speed in pairs(a) do
+			if b[point] ~= speed then
+				return false
+			end
+		end
+		for point in pairs(b) do
+			if a[point] == nil then
+				return false
+			end
+		end
+		return true
+	end
+
+	---@param speeds number[]
+	---@return string
+	local function speedList(speeds)
+		if #speeds == 0 then
+			return "none"
+		end
+		local parts = {}
+		for i, speed in ipairs(speeds) do
+			parts[i] = tostring(speed)
+		end
+		return concat(parts, ", ")
+	end
+
+	-- the most seen of the lists of speeds, on a tie the one the addon has now wins and then the longest
+	---@param groups AnalysisGroups
+	---@param now string What the sim file has.
+	---@return string?
+	local function mostSeen(groups, now)
+		local best
+		for _, key in ipairs(groups.order) do
+			local count, bestCount = #groups.byKey[key], best and #groups.byKey[best]
+			if not best or count > bestCount or (count == bestCount and best ~= now and (key == now or #key > #best)) then
+				best = key
+			end
+		end
+		return best
+	end
+
+	---@param text string
+	---@return number[]
+	local function parseSpeeds(text)
+		local speeds = {}
+		for speed in text:gmatch("%d+") do
+			speeds[#speeds + 1] = tonumber(speed)
+		end
+		return speeds
+	end
+
+	---@param groups AnalysisGroups
+	---@param best string
+	---@return string
+	local function describeSeen(groups, best)
+		local others, total = {}, 0
+		for _, key in ipairs(groups.order) do
+			local flights = groups.byKey[key]
+			total = total + #flights
+			if key ~= best then
+				local list = {}
+				for i, index in ipairs(flights) do
+					list[i] = tostring(index)
+				end
+				others[#others + 1] = fmt("%s on flight %s", key == "" and "none" or key, concat(list, ", "))
+			end
+		end
+		return fmt("%s on %d of %d flights%s", best == "" and "none" or best, #groups.byKey[best], total, #others > 0 and (" (" .. concat(others, "; ") .. ")") or "")
+	end
+
+	-- Suggestions ------------------------------------------------------------------------------------------------------------
+
+	--- Prints what to change in the sim file for the flights of a game to be estimated better.
+	---@param analyses FlightAnalysis[] The analyses of the flights, in the order they were recorded.
+	---@param simFile string The sim file, for what to say.
+	local function suggestClient(analyses, simFile)
+		printf("\nSuggested changes to %s\n", simFile)
+		local ns = analyses[1].ns
+		local scale = ns.TAXI_SPEED_SCALE
+		local default = util.round(ns.TAXI_SPEED_FALLBACK / scale / 5) * 5
+
+		-- the flights by taxi map, and what speeds they were flown at
+		local maps, mapOrder = {}, {}
+		for _, a in ipairs(analyses) do
+			if not a.incomplete and #a.track >= 2 and a.record.area then
+				local map = a.record.area
+				if not maps[map] then
+					maps[map] = { flights = {}, time = {} }
+					mapOrder[#mapOrder + 1] = map
+				end
+				local info = maps[map]
+				info.flights[#info.flights + 1] = a
+				for j = 2, #a.track do
+					local step = a.steps[j]
+					if step.kind == "move" then
+						local speed = a:roundSpeed(step.speed)
+						info.time[speed] = (info.time[speed] or 0) + step.dt
+					end
+				end
+			end
+		end
+		table.sort(mapOrder)
+
+		local changes = 0
+		local pathLines, pathNotes, pathOrder, small = {}, {}, {}, 0
+		local sim = {
+			speeds = ns.AREA_SPEEDS or {},
+			ramps = ns.AREA_RAMPS or {},
+			spacing = ns.AREA_SPACING or {},
+			paths = ns.PATH_SPEEDS or {},
+		}
+
+		for _, map in ipairs(mapOrder) do
+			local info = maps[map]
+			local out = {}
+			local restores = {}
+
+			-- the speed most of the time was flown at is the speed of the taxi map
+			local cruise, cruiseTime = default, -1
+			for _, speed in ipairs(util.keys(info.time)) do
+				if info.time[speed] > cruiseTime then
+					cruise, cruiseTime = speed, info.time[speed]
+				end
+			end
+			local now = sim.speeds[map] or default
+			if cruise ~= now then
+				out[#out + 1] = fmt("  speed: flown at %d, the sim file uses %d (%s)", cruise, now, sim.speeds[map] and "its entry in AREA_SPEEDS is wrong" or "it has no entry in AREA_SPEEDS")
+				if cruise == default then
+					out[#out + 1] = fmt("    remove from AREA_SPEEDS:    [%d] = ...", map)
+					restores[#restores + 1] = override(ns, "AREA_SPEEDS", map, nil)
+				else
+					out[#out + 1] = fmt("    %s AREA_SPEEDS:    [%d] = %d,", sim.speeds[map] and "change in" or "add to", map, cruise)
+					restores[#restores + 1] = override(ns, "AREA_SPEEDS", map, cruise)
+				end
+			end
+
+			-- how the flights sped up after taking off and slowed down before landing
+			local takeoffs, landings = util.newGroups(), util.newGroups()
+			local flights = {}
+			for _, a in ipairs(info.flights) do
+				local route = a.record.route or {}
+				local paths, intervals = a:observe()
+				local geometry = a:geometry()
+				if geometry and #intervals > 0 then
+					flights[#flights + 1] = { index = a.index, analysis = a, geometry = geometry, intervals = intervals, seconds = a.actual - a.jumpTime }
+				end
+				local from, to = a.data.paths[route[1]], a.data.paths[route[#route - 1]]
+				local firstPath = from and from[route[2]]
+				local lastPath = to and to[route[#route]]
+				for _, path in ipairs(util.keys(paths)) do
+					local flown = paths[path]
+					local count = #a.data.pathPoints[path]
+					local spread = spreadSpeeds(flown.speeds, flown.first, flown.last)
+					local fastest, reachesCruise = 0, false
+					for _, speed in pairs(spread) do
+						fastest = max(fastest, speed)
+						if speed == cruise then
+							reachesCruise = true
+						end
+					end
+					-- a path with its own speeds is left to those, and if we never got up to speed we can't tell where taking off ends and landing begins
+					if not (sim.paths[path] or fastest > cruise) and reachesCruise then
+						if path == firstPath and flown.first == 1 then
+							local list = {}
+							local point = 1
+							while point <= flown.last and spread[point] < cruise do
+								list[#list + 1] = spread[point]
+								point = point + 1
+							end
+							util.addToGroup(takeoffs, concat(list, ", "), a.index)
+						end
+						if path == lastPath and flown.last == count then
+							local list = {}
+							local point = count - 1
+							while point >= flown.first and spread[point] < cruise do
+								table.insert(list, 1, spread[point])
+								point = point - 1
+							end
+							util.addToGroup(landings, concat(list, ", "), a.index)
+						end
+					end
+				end
+			end
+
+			local ramp = sim.ramps[map] or { takeoff = {}, landing = {} }
+			-- taxi maps with speeds by the length of the stretches leave what is flown slower to those, their ramp is only what is the same on every flight
+			if not sim.spacing[map] or #sim.spacing[map] == 0 then
+				local takeoff = mostSeen(takeoffs, concat(ramp.takeoff, ", "))
+				local landing = mostSeen(landings, concat(ramp.landing, ", "))
+				if takeoff and landing and (takeoff ~= concat(ramp.takeoff, ", ") or landing ~= concat(ramp.landing, ", ")) then
+					-- what most flights did is not always what brings the estimates closest, so a taxi map that already has speeds for taking off and landing only gets others if they do
+					local better = true
+					local candidate = { takeoff = parseSpeeds(takeoff), landing = parseSpeeds(landing) }
+					if sim.ramps[map] then
+						local currentError = modelError(ns, map, flights)
+						local restore = override(ns, "AREA_RAMPS", map, candidate)
+						local candidateError = modelError(ns, map, flights)
+						restore()
+						better = candidateError < currentError - RAMP_MIN_SECONDS
+					end
+					if better then
+						out[#out + 1] = fmt("  speeds after taking off: %s, the sim file has %s", describeSeen(takeoffs, takeoff), speedList(ramp.takeoff))
+						out[#out + 1] = fmt("  speeds before landing: %s, the sim file has %s", describeSeen(landings, landing), speedList(ramp.landing))
+						if takeoff == "" and landing == "" then
+							out[#out + 1] = fmt("    remove from AREA_RAMPS:    [%d] = ...", map)
+						else
+							out[#out + 1] = fmt("    %s AREA_RAMPS:    [%d] = { takeoff = { %s }, landing = { %s } },", sim.ramps[map] and "change in" or "add to", map, takeoff, landing)
+						end
+						local takeoffCount, landingCount = #takeoffs.byKey[takeoff], #landings.byKey[landing]
+						local takeoffTotal, landingTotal = 0, 0
+						for _, list in pairs(takeoffs.byKey) do takeoffTotal = takeoffTotal + #list end
+						for _, list in pairs(landings.byKey) do landingTotal = landingTotal + #list end
+						if takeoffCount < 2 or landingCount < 2 or takeoffCount * 2 <= takeoffTotal or landingCount * 2 <= landingTotal then
+							out[#out + 1] = "    not sure about this one as too few flights agree, fly a few more single path flights on this taxi map"
+						end
+						if takeoff == "" and landing == "" then
+							candidate = nil
+						end
+						restores[#restores + 1] = override(ns, "AREA_RAMPS", map, candidate)
+					end
+				end
+			end
+
+			-- if flying slower where the points are close to each other brings the estimates closer to how long the flights took
+			local average, worst = modelError(ns, map, flights)
+			if #flights >= SPACING_MIN_FLIGHTS then
+				local fitted = fitSpacing(ns, map, flights, max(cruise, 10))
+				local restore = override(ns, "AREA_SPACING", map, fitted)
+				local fittedAverage, fittedWorst = modelError(ns, map, flights)
+				restore()
+				if not sameSpacing(fitted, sim.spacing[map] or {}) and fittedAverage <= average - SPACING_MIN_SECONDS then
+					out[#out + 1] = fmt("  speeds by how close the points are: the %d flights are off by %.1f sec on average (%.1f at worst) with the sim file, and by %.1f sec (%.1f at worst) with these", #flights, average, worst, fittedAverage, fittedWorst)
+					if #fitted > 0 then
+						out[#out + 1] = fmt("    %s AREA_SPACING:    [%d] = { %s },", sim.spacing[map] and "change in" or "add to", map, spacingList(fitted))
+					else
+						out[#out + 1] = fmt("    remove from AREA_SPACING:    [%d] = ...", map)
+					end
+					restores[#restores + 1] = override(ns, "AREA_SPACING", map, #fitted > 0 and fitted or nil)
+					average, worst = fittedAverage, fittedWorst
+				end
+			end
+
+			-- the paths that are off by more than a few seconds with the speeds of the taxi map need their own speeds
+			local savedPaths = ns.PATH_SPEEDS
+			ns.PATH_SPEEDS = {}
+			for _, flight in ipairs(flights) do
+				local a = flight.analysis
+				local without = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+				local paths = a:observe()
+				if without then
+					-- the stretches of each path in this flight, and the seconds the speeds of the taxi map give them
+					local byPath = {}
+					for i, interval in ipairs(flight.intervals) do
+						local list = byPath[interval.path]
+						if not list then
+							list = {}
+							byPath[interval.path] = list
+						end
+						list[#list + 1] = { interval = interval, step = without.steps[i] }
+					end
+					for _, path in ipairs(util.keys(paths)) do
+						local flown = paths[path]
+						local stretches = byPath[path]
+						if stretches then
+							local observed, predicted, seen = 0, 0, true
+							for _, stretch in ipairs(stretches) do
+								if not stretch.interval.speed then
+									seen = false -- we did not see how fast all of it was flown
+									break
+								end
+								observed = observed + stretch.interval.yards / (stretch.interval.speed * scale)
+								predicted = predicted + (stretch.step and stretch.step.distance / stretch.step.speed or 0)
+							end
+							if seen then
+								local gain = predicted - observed
+								local count = #a.data.pathPoints[path]
+								local whole = flown.first == 1 and flown.last == count
+								local name = a.data.pathName(path) or "?"
+								local had = sim.paths[path] and spreadSpeeds(sim.paths[path], flown.first, flown.last) or nil
+								local spread = spreadSpeeds(flown.speeds, flown.first, flown.last)
+								if had then
+									had[count] = nil -- the last point sets no speed as the flight ends there
+								end
+								spread[count] = nil
+								local text = fmt("%.0f sec %s than the speeds of the taxi map give", abs(gain), gain > 0 and "shorter" or "longer")
+								if abs(gain) < PATH_MIN_SECONDS then
+									if had and whole then
+										if not pathLines[path] then
+											pathOrder[#pathOrder + 1] = path
+										end
+										pathLines[path] = fmt("    remove from PATH_SPEEDS:    [%d] = ... -- %s (flight %d, only %s)", path, name, a.index, text)
+									elseif not had and flown.time > 0 and abs(gain) >= 1 then
+										small = small + 1
+									end
+								elseif not sameSpread(had, spread) then
+									if whole then
+										local parts = {}
+										for _, point in ipairs(util.keys(flown.speeds)) do
+											if point ~= count then
+												parts[#parts + 1] = fmt("[%d] = %d", point, flown.speeds[point])
+											end
+										end
+										local unsure = {}
+										for i, point in ipairs(flown.unsure) do
+											unsure[i] = tostring(point)
+										end
+										if not pathLines[path] then
+											pathOrder[#pathOrder + 1] = path
+										end
+										pathLines[path] = fmt("    %s PATH_SPEEDS:    [%d] = { %s }, -- %s (flight %d, %s%s)", had and "change in" or "add to", path, concat(parts, ", "), name, a.index, text, #unsure > 0 and (", not sure about point " .. concat(unsure, ", ")) or "")
+									elseif not pathLines[path] then
+										pathNotes[path] = fmt("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", path, name, text, had and " and differs from the sim file" or "", a.index, flown.first, flown.last, count)
+									end
+								end
+							end
+						end
+					end
+				end
+			end
+			ns.PATH_SPEEDS = savedPaths
+
+			for i = #restores, 1, -1 do
+				restores[i]()
+			end
+
+			if #out > 0 then
+				changes = changes + 1
+				printf("\n  taxi map %d (%d flights, mostly flown at %d)\n", map, #info.flights, cruise)
+				print("  " .. concat(out, "\n  "))
+			else
+				printf("\n  taxi map %d (%d flights, mostly flown at %d, off by %.1f sec on average and %.1f at worst): nothing to change\n", map, #info.flights, cruise, average, worst)
+			end
+		end
+
+		local noteLines = {}
+		table.sort(pathOrder)
+		local lines = {}
+		for _, path in ipairs(pathOrder) do
+			lines[#lines + 1] = pathLines[path]
+		end
+		for _, path in ipairs(util.keys(pathNotes)) do
+			if not pathLines[path] then
+				noteLines[#noteLines + 1] = pathNotes[path]
+			end
+		end
+		if #lines > 0 or #noteLines > 0 then
+			changes = changes + 1
+			print("\n  paths with their own speeds")
+			for _, line in ipairs(lines) do
+				print(line)
+			end
+			for _, line in ipairs(noteLines) do
+				print(line)
+			end
+		end
+		if small > 0 then
+			printf("\n  %d paths were off by 1 to %d sec with the speeds of their taxi map and are left alone\n", small, PATH_MIN_SECONDS)
+		end
+		if changes == 0 then
+			print("\n  the sim file already matches what was flown")
+		end
+		print("\n  the speeds are compared rounded to the nearest 5, and the time spent loading another map is left out of how long a flight took")
+	end
+
+	--- Prints the suggested changes for each of the games the flights are from.
+	---@param analyses FlightAnalysis[]
+	---@param simFile? string The sim file to compare to instead of the ones of the games.
+	return function(analyses, simFile)
+		local clients = {} ---@type table<string, FlightAnalysis[]>
+		local order = {} ---@type string[]
+		for _, a in ipairs(analyses) do
+			local client = a.data.client
+			if not clients[client] then
+				clients[client] = {}
+				order[#order + 1] = client
+			end
+			clients[client][#clients[client] + 1] = a
+		end
+		for _, client in ipairs(order) do
+			suggestClient(clients[client], simFile or (ctx.root .. "/sim_" .. client .. ".lua"))
+		end
+	end
+end
