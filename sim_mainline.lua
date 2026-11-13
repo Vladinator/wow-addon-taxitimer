@@ -27,6 +27,12 @@ ns.AREA_SPEEDS = {
 	[2276] = 50, -- Khaz Algar
 }
 
+-- Taxi nodes whose mount flies at another speed than the others of the taxi map. The whole flight is flown at that speed when it starts at the node, also the hops after the first.
+-- Paths in `PATH_SPEEDS` and the speeds of `AREA_RAMPS` and `AREA_SPACING` still have their own speeds.
+ns.NODE_SPEEDS = {
+	[252] = 45, -- Wyrmrest Temple, Dragonblight
+}
+
 -- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
 ns.AREA_FIXED_TIME = {
 	[2276] = true, -- Khaz Algar

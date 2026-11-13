@@ -82,7 +82,7 @@ local TYPES = { TAXINODES = "TaxiNodesStruct", TAXIPATH = "TaxiPathStruct", TAXI
 local ROWS_PER_CHUNK = 8192 -- a function has a limit to how many constants it can have
 
 local floor, ceil = math.floor, math.ceil
-local fmt, concat = string.format, table.concat
+local format, concat = string.format, table.concat
 
 -- csv --------------------------------------------------------------------------------------------------------------------------
 
@@ -229,7 +229,7 @@ function Parser:read()
 						rows[i] = entry[1]
 					end
 				else
-					io.stderr:write(fmt("[%s] unable to sort the path nodes as the PathID, NodeIndex or ID column is missing\n", self.client))
+					io.stderr:write(format("[%s] unable to sort the path nodes as the PathID, NodeIndex or ID column is missing\n", self.client))
 				end
 			end
 			db[name] = csv
@@ -268,7 +268,7 @@ function Parser:write(outfile)
 	local lua = {}
 	lua[#lua + 1] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n"
 	lua[#lua + 1] = "ns = ns or {}"
-	io.write(fmt("Writing lua file for %s...\n", self.client))
+	io.write(format("Writing lua file for %s...\n", self.client))
 
 	local items = {} ---@type table<string, string[]>
 	for _, name in ipairs(FILES) do
@@ -337,7 +337,7 @@ local PATH_COLORS = {} ---@type string[]
 for r = 64, 254, 32 do
 	for g = 64, 254, 32 do
 		for b = 64, 254, 32 do
-			PATH_COLORS[#PATH_COLORS + 1] = fmt("#%02x%02x%02x", r, g, b)
+			PATH_COLORS[#PATH_COLORS + 1] = format("#%02x%02x%02x", r, g, b)
 		end
 	end
 end
@@ -372,7 +372,7 @@ function Parser:rotate(x, y, map)
 		self.unknownMaps = self.unknownMaps or {}
 		if not self.unknownMaps[map] then
 			self.unknownMaps[map] = true
-			io.write(fmt("[%s] new map can't rotate and flip coordinate system\n", tostring(map)))
+			io.write(format("[%s] new map can't rotate and flip coordinate system\n", tostring(map)))
 		end
 	end
 	local sin = deg2rad(-90)
@@ -544,7 +544,7 @@ function Parser:writeSvg(outfile, map)
 			local nx = node.x + offsetx + padding
 			local ny = node.y + offsety + padding
 			local label = escape(node.label)
-			svg[#svg + 1] = fmt('<g id="node_%d" class="node"><title>%s</title><ellipse fill="%s" stroke="#000" cx="%d" cy="%d" rx="%d" ry="%d" /><text text-anchor="middle" x="%.2f" y="%.2f" font-family="Times New Roman,serif" font-size="%.2f">%s</text></g>', node.id, label, node.color, whole(nx * scale), whole(ny * scale), whole(nodesizex * nodescale), whole(nodesizey * nodescale), nx * scale, ny * scale, math.max(nodefontmin, nodefont * nodescale), label)
+			svg[#svg + 1] = format('<g id="node_%d" class="node"><title>%s</title><ellipse fill="%s" stroke="#000" cx="%d" cy="%d" rx="%d" ry="%d" /><text text-anchor="middle" x="%.2f" y="%.2f" font-family="Times New Roman,serif" font-size="%.2f">%s</text></g>', node.id, label, node.color, whole(nx * scale), whole(ny * scale), whole(nodesizex * nodescale), whole(nodesizey * nodescale), nx * scale, ny * scale, math.max(nodefontmin, nodefont * nodescale), label)
 		end
 	end
 
@@ -554,7 +554,7 @@ function Parser:writeSvg(outfile, map)
 				local nx = point.x + offsetx + padding
 				local ny = point.y + offsety + padding
 				local r = math.max(edgesizemin, edgesize * nodescale)
-				svg[#svg + 1] = fmt('<g id="path_%d_%d" class="edge"><ellipse fill="%s" stroke="#ccc" cx="%d" cy="%d" rx="%d" ry="%d" /></g>', pathId, i, point.color, whole(nx * scale), whole(ny * scale), whole(r), whole(r))
+				svg[#svg + 1] = format('<g id="path_%d_%d" class="edge"><ellipse fill="%s" stroke="#ccc" cx="%d" cy="%d" rx="%d" ry="%d" /></g>', pathId, i, point.color, whole(nx * scale), whole(ny * scale), whole(r), whole(r))
 			end
 		end
 	end
@@ -574,7 +574,7 @@ function Parser:writeSvg(outfile, map)
 					local ny1 = to.y + offsety + padding
 					local nx2 = from.x + offsetx + padding
 					local ny2 = from.y + offsety + padding
-					svg[#svg + 1] = fmt('<line id="line_%d_%d" class="edge" stroke="%s" x1="%d" y1="%d" x2="%d" y2="%d" />', nodeId, toId + 1, to.color, whole(nx1 * scale), whole(ny1 * scale), whole(nx2 * scale), whole(ny2 * scale))
+					svg[#svg + 1] = format('<line id="line_%d_%d" class="edge" stroke="%s" x1="%d" y1="%d" x2="%d" y2="%d" />', nodeId, toId + 1, to.color, whole(nx1 * scale), whole(ny1 * scale), whole(nx2 * scale), whole(ny2 * scale))
 				end
 			end
 		end
@@ -586,10 +586,10 @@ function Parser:writeSvg(outfile, map)
 		reversed[#reversed + 1] = svg[i]
 	end
 
-	io.write(fmt("Writing svg file for %s...\n", tostring(map)))
+	io.write(format("Writing svg file for %s...\n", tostring(map)))
 	local text = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\r\n'
 		.. '<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"\r\n\t"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\r\n'
-		.. fmt('<svg width="%d" height="%d" transform="scale(1 1) rotate(0) translate(0 0)" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\r\n', whole((width + padding * 2) * scale), whole((height + padding * 2) * scale))
+		.. format('<svg width="%d" height="%d" transform="scale(1 1) rotate(0) translate(0 0)" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">\r\n', whole((width + padding * 2) * scale), whole((height + padding * 2) * scale))
 		.. concat(reversed, "\r\n")
 		.. "\r\n</svg>\r\n"
 	local file = assert(io.open(outfile, "wb"))

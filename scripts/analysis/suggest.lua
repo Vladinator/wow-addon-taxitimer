@@ -13,13 +13,13 @@
 ---@alias SuggestSpacing number[][]
 
 ---The tables of the simulation that are changed for a moment.
----@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"PATH_SPEEDS"
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"PATH_SPEEDS"
 
 ---@param ctx AnalysisContext
 ---@return fun(analyses: FlightAnalysis[], simFile?: string)
 return function(ctx)
 	local util = ctx.util
-	local fmt, concat = string.format, table.concat
+	local format, concat = string.format, table.concat
 	local abs, max, min = math.abs, math.max, math.min
 	local printf = util.printf
 
@@ -138,7 +138,7 @@ return function(ctx)
 	local function spacingList(spacing)
 		local parts = {}
 		for _, step in ipairs(spacing) do
-			parts[#parts + 1] = fmt("{ %d, %d }", step[1], step[2])
+			parts[#parts + 1] = format("{ %d, %d }", step[1], step[2])
 		end
 		return concat(parts, ", ")
 	end
@@ -252,10 +252,10 @@ return function(ctx)
 				for i, index in ipairs(flights) do
 					list[i] = tostring(index)
 				end
-				others[#others + 1] = fmt("%s on flight %s", key == "" and "none" or key, concat(list, ", "))
+				others[#others + 1] = format("%s on flight %s", key == "" and "none" or key, concat(list, ", "))
 			end
 		end
-		return fmt("%s on %d of %d flights%s", best == "" and "none" or best, #groups.byKey[best], total, #others > 0 and (" (" .. concat(others, "; ") .. ")") or "")
+		return format("%s on %d of %d flights%s", best == "" and "none" or best, #groups.byKey[best], total, #others > 0 and (" (" .. concat(others, "; ") .. ")") or "")
 	end
 
 	-- Suggestions ------------------------------------------------------------------------------------------------------------
@@ -297,6 +297,7 @@ return function(ctx)
 			speeds = ns.AREA_SPEEDS or {},
 			ramps = ns.AREA_RAMPS or {},
 			spacing = ns.AREA_SPACING or {},
+			nodes = ns.NODE_SPEEDS or {},
 			paths = ns.PATH_SPEEDS or {},
 		}
 
@@ -314,12 +315,12 @@ return function(ctx)
 			end
 			local now = sim.speeds[map] or default
 			if cruise ~= now then
-				out[#out + 1] = fmt("  speed: flown at %d, the sim file uses %d (%s)", cruise, now, sim.speeds[map] and "its entry in AREA_SPEEDS is wrong" or "it has no entry in AREA_SPEEDS")
+				out[#out + 1] = format("  speed: flown at %d, the sim file uses %d (%s)", cruise, now, sim.speeds[map] and "its entry in AREA_SPEEDS is wrong" or "it has no entry in AREA_SPEEDS")
 				if cruise == default then
-					out[#out + 1] = fmt("    remove from AREA_SPEEDS:    [%d] = ...", map)
+					out[#out + 1] = format("    remove from AREA_SPEEDS:    [%d] = ...", map)
 					restores[#restores + 1] = override(ns, "AREA_SPEEDS", map, nil)
 				else
-					out[#out + 1] = fmt("    %s AREA_SPEEDS:    [%d] = %d,", sim.speeds[map] and "change in" or "add to", map, cruise)
+					out[#out + 1] = format("    %s AREA_SPEEDS:    [%d] = %d,", sim.speeds[map] and "change in" or "add to", map, cruise)
 					restores[#restores + 1] = override(ns, "AREA_SPEEDS", map, cruise)
 				end
 			end
@@ -389,12 +390,12 @@ return function(ctx)
 						better = candidateError < currentError - RAMP_MIN_SECONDS
 					end
 					if better then
-						out[#out + 1] = fmt("  speeds after taking off: %s, the sim file has %s", describeSeen(takeoffs, takeoff), speedList(ramp.takeoff))
-						out[#out + 1] = fmt("  speeds before landing: %s, the sim file has %s", describeSeen(landings, landing), speedList(ramp.landing))
+						out[#out + 1] = format("  speeds after taking off: %s, the sim file has %s", describeSeen(takeoffs, takeoff), speedList(ramp.takeoff))
+						out[#out + 1] = format("  speeds before landing: %s, the sim file has %s", describeSeen(landings, landing), speedList(ramp.landing))
 						if takeoff == "" and landing == "" then
-							out[#out + 1] = fmt("    remove from AREA_RAMPS:    [%d] = ...", map)
+							out[#out + 1] = format("    remove from AREA_RAMPS:    [%d] = ...", map)
 						else
-							out[#out + 1] = fmt("    %s AREA_RAMPS:    [%d] = { takeoff = { %s }, landing = { %s } },", sim.ramps[map] and "change in" or "add to", map, takeoff, landing)
+							out[#out + 1] = format("    %s AREA_RAMPS:    [%d] = { takeoff = { %s }, landing = { %s } },", sim.ramps[map] and "change in" or "add to", map, takeoff, landing)
 						end
 						local takeoffCount, landingCount = #takeoffs.byKey[takeoff], #landings.byKey[landing]
 						local takeoffTotal, landingTotal = 0, 0
@@ -419,14 +420,76 @@ return function(ctx)
 				local fittedAverage, fittedWorst = modelError(ns, map, flights)
 				restore()
 				if not sameSpacing(fitted, sim.spacing[map] or {}) and fittedAverage <= average - SPACING_MIN_SECONDS then
-					out[#out + 1] = fmt("  speeds by how close the points are: the %d flights are off by %.1f sec on average (%.1f at worst) with the sim file, and by %.1f sec (%.1f at worst) with these", #flights, average, worst, fittedAverage, fittedWorst)
+					out[#out + 1] = format("  speeds by how close the points are: the %d flights are off by %.1f sec on average (%.1f at worst) with the sim file, and by %.1f sec (%.1f at worst) with these", #flights, average, worst, fittedAverage, fittedWorst)
 					if #fitted > 0 then
-						out[#out + 1] = fmt("    %s AREA_SPACING:    [%d] = { %s },", sim.spacing[map] and "change in" or "add to", map, spacingList(fitted))
+						out[#out + 1] = format("    %s AREA_SPACING:    [%d] = { %s },", sim.spacing[map] and "change in" or "add to", map, spacingList(fitted))
 					else
-						out[#out + 1] = fmt("    remove from AREA_SPACING:    [%d] = ...", map)
+						out[#out + 1] = format("    remove from AREA_SPACING:    [%d] = ...", map)
 					end
 					restores[#restores + 1] = override(ns, "AREA_SPACING", map, #fitted > 0 and fitted or nil)
 					average, worst = fittedAverage, fittedWorst
+				end
+			end
+
+			-- the taxi nodes whose mount flies at another speed than the others of the taxi map, as the whole flight is flown on the mount of the node it starts at
+			local byNode, nodeOrder = {}, {} ---@type table<number, SuggestFlight[]>, number[]
+			for _, flight in ipairs(flights) do
+				local first = (flight.analysis.record.route or {})[1]
+				if first then
+					if not byNode[first] then
+						byNode[first] = {}
+						nodeOrder[#nodeOrder + 1] = first
+					end
+					table.insert(byNode[first], flight)
+				end
+			end
+			table.sort(nodeOrder)
+			for _, node in ipairs(nodeOrder) do
+				local nodeFlights = byNode[node]
+				-- the speed the flights from the node were flown at for most of the time
+				local time = {} ---@type table<number, number>
+				for _, flight in ipairs(nodeFlights) do
+					for _, stretch in ipairs(flight.intervals) do
+						if stretch.speed and stretch.yards > 0 then
+							time[stretch.speed] = (time[stretch.speed] or 0) + stretch.yards / (stretch.speed * scale)
+						end
+					end
+				end
+				local dominant, dominantTime = nil, 0
+				for _, speed in ipairs(util.keys(time)) do
+					if time[speed] > dominantTime then
+						dominant, dominantTime = speed, time[speed]
+					end
+				end
+				local had = sim.nodes[node]
+				local wanted = dominant ~= cruise and dominant or nil -- a node that flies like the rest of the taxi map needs none
+				if dominant and wanted ~= had then
+					-- how much closer the flights from the node get to how long they took
+					local function offBy()
+						local total = 0
+						for _, flight in ipairs(nodeFlights) do
+							local flightInfo = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+							total = total + (flightInfo and abs(flight.seconds - flightInfo.duration) or 0)
+						end
+						return total
+					end
+					local before = offBy()
+					local restore = override(ns, "NODE_SPEEDS", node, wanted)
+					local after = offBy()
+					restore()
+					if before - after >= PATH_MIN_SECONDS then
+						local name = nodeFlights[1].analysis.data.nodeName(node)
+						local count = #nodeFlights
+						if wanted then
+							out[#out + 1] = format("    %s NODE_SPEEDS:    [%d] = %d, -- %s (%d flight%s from it end up %.0f sec closer with it)", had and "change in" or "add to", node, wanted, name, count, count == 1 and "" or "s", before - after)
+							if count < 2 then
+								out[#out + 1] = "    only one flight starts at this taxi node, fly another one from it on a different path to see that it is the node and not the path"
+							end
+						else
+							out[#out + 1] = format("    remove from NODE_SPEEDS:    [%d] = ... -- %s (the %d flight%s from it fly like the rest of the taxi map)", node, name, count, count == 1 and "" or "s")
+						end
+						restores[#restores + 1] = override(ns, "NODE_SPEEDS", node, wanted)
+					end
 				end
 			end
 
@@ -472,13 +535,13 @@ return function(ctx)
 									had[count] = nil -- the last point sets no speed as the flight ends there
 								end
 								spread[count] = nil
-								local text = fmt("%.0f sec %s than the speeds of the taxi map give", abs(gain), gain > 0 and "shorter" or "longer")
+								local text = format("%.0f sec %s than the speeds of the taxi map give", abs(gain), gain > 0 and "shorter" or "longer")
 								if abs(gain) < PATH_MIN_SECONDS then
 									if had and whole then
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
 										end
-										pathLines[path] = fmt("    remove from PATH_SPEEDS:    [%d] = ... -- %s (flight %d, only %s)", path, name, a.index, text)
+										pathLines[path] = format("    remove from PATH_SPEEDS:    [%d] = ... -- %s (flight %d, only %s)", path, name, a.index, text)
 									elseif not had and flown.time > 0 and abs(gain) >= 1 then
 										small = small + 1
 									end
@@ -487,7 +550,7 @@ return function(ctx)
 										local parts = {}
 										for _, point in ipairs(util.keys(flown.speeds)) do
 											if point ~= count then
-												parts[#parts + 1] = fmt("[%d] = %d", point, flown.speeds[point])
+												parts[#parts + 1] = format("[%d] = %d", point, flown.speeds[point])
 											end
 										end
 										local unsure = {}
@@ -497,9 +560,9 @@ return function(ctx)
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
 										end
-										pathLines[path] = fmt("    %s PATH_SPEEDS:    [%d] = { %s }, -- %s (flight %d, %s%s)", had and "change in" or "add to", path, concat(parts, ", "), name, a.index, text, #unsure > 0 and (", not sure about point " .. concat(unsure, ", ")) or "")
+										pathLines[path] = format("    %s PATH_SPEEDS:    [%d] = { %s }, -- %s (flight %d, %s%s)", had and "change in" or "add to", path, concat(parts, ", "), name, a.index, text, #unsure > 0 and (", not sure about point " .. concat(unsure, ", ")) or "")
 									elseif not pathLines[path] then
-										pathNotes[path] = fmt("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", path, name, text, had and " and differs from the sim file" or "", a.index, flown.first, flown.last, count)
+										pathNotes[path] = format("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", path, name, text, had and " and differs from the sim file" or "", a.index, flown.first, flown.last, count)
 									end
 								end
 							end

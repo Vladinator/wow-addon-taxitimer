@@ -275,7 +275,7 @@ local Recorder do
 				distance = Round(info.distance, 1),
 				distance2D = Round(info.distance2D, 1),
 				speed = Round(info.speed, 2),
-				areaSpeed = Round(Speed(state.areaID), 2),
+				areaSpeed = Round(info.areaSpeed, 2),
 				delay = info.delay,
 				delayIncluded = info.delayIncluded,
 				clicked = Round(GetTime(), 2),

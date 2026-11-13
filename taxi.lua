@@ -508,6 +508,7 @@ end
 ---@field public steps FlightStep[] The stretches between the points in the order they are flown.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
+---@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at.
 ---@field public donotadjustarrivaltime? boolean
 
 local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
@@ -552,6 +553,17 @@ end
 local function GetFlightInfoFromGeometry(geometry, areaID)
 	local areaSpeed = Speed(areaID)
 	local speeds, isDynamic = GetPointSpeeds(geometry.points, areaID)
+
+	-- some taxi nodes have a mount that flies faster or slower than the others of the taxi map, the whole flight is flown on the mount of the node it starts at
+	local nodeSpeeds = ns.NODE_SPEEDS
+	local firstNode = geometry.nodes[1]
+	local nodeSpeed = firstNode and nodeSpeeds and nodeSpeeds[firstNode.nodeID]
+
+	if nodeSpeed then
+		areaSpeed = nodeSpeed * TAXI_SPEED_SCALE
+		isDynamic = true -- the speed of the taxi map says nothing about the speed we fly at
+	end
+
 	local segments = {} ---@type TaxiPathSegment[]
 	local steps = {} ---@type FlightStep[]
 	local numSteps = 0
@@ -617,6 +629,7 @@ local function GetFlightInfoFromGeometry(geometry, areaID)
 			steps = steps,
 			maps = geometry.maps,
 			dynamicSpeed = isDynamic,
+			areaSpeed = areaSpeed,
 		}
 
 		if INCLUDE_STOP_DELAYS then

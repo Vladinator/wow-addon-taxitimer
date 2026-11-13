@@ -7,7 +7,7 @@ The estimates are made by the simulation of the addon itself (`catmul.lua` and `
 To record flights set `RECORD_FLIGHTS = true` at the top of `core.lua`, fly, then log out or reload so the saved variables are written.
 
 After the summary of the flights it lists the lines to add, change or remove in the sim file of the game (`sim_mainline.lua`, `sim_forever.lua`, `sim_vanilla.lua` or `sim_classic.lua`) for its speeds to match what was flown.
-The speeds of a taxi map come first (its speed, how it takes off and lands, and if it flies slower where the points are close to each other), a path only gets its own speeds if it is still off by a few seconds with those.
+The speeds of a taxi map come first (its speed, how it takes off and lands, and if it flies slower where the points are close to each other), then the taxi nodes whose mount flies at another speed (the whole flight is flown on the mount of the node it starts at), and a path only gets its own speeds if it is still off by a few seconds with those.
 Some paths change the flight speed as they pass their points. These speeds are not part of the client files, so recorded flights are the only source for them.
 
 Runs in Lua 5.1 and later (use `lua`, `lua5.1`, `luajit` or the Lua of the Lua language server):
