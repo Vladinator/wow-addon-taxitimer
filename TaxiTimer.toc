@@ -13,4 +13,8 @@ db_vanilla.lua [AllowLoadGameType vanilla]
 db_classic.lua [AllowLoadGameType classic]
 db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
 db_mainline.lua [AllowLoadGameType standard]
+sim_vanilla.lua [AllowLoadGameType vanilla]
+sim_classic.lua [AllowLoadGameType classic]
+sim_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
+sim_mainline.lua [AllowLoadGameType standard]
 core.lua

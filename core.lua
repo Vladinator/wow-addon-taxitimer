@@ -3,6 +3,12 @@ local RECORD_FLIGHTS = false -- enable recording of paths to SV for later analys
 
 local addonName = ... ---@type string
 
+---@alias TaxiFlavor "mainline"|"forever"|"vanilla"|"classic"
+
+---@class TaxiAreaRamp
+---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
+---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
+
 ---@class TaxiNodesStruct
 
 ---@class TaxiPathStruct
@@ -51,6 +57,12 @@ local addonName = ... ---@type string
 ---@field public TAXIPATHNODE TaxiPathNodeStruct
 ---@field public taxipath TaxiPathStructDB
 ---@field public taxipathnode TaxiPathNodeStructDB
+---@field public FLAVOR? TaxiFlavor The game the `sim_` file that was loaded is for.
+---@field public SKIP_RETRACED? boolean If the stretch where two paths run alongside each other at a taxi node is skipped when flying past it.
+---@field public AREA_SPEEDS? table<number, number> The speed of the taxi maps that do not fly at the fallback speed.
+---@field public AREA_RAMPS? table<number, TaxiAreaRamp> The speeds flown after taking off and before landing, per taxi map.
+---@field public AREA_SPACING? table<number, number[][]> The speeds flown where the points are close to each other as `{ yards, speed }`, per taxi map.
+---@field public PATH_SPEEDS? table<number, table<number, number>> The speeds flown from the points of the paths that have their own, as `[pathId] = { [point index] = speed }`.
 
 local ns = select(2, ...) ---@class taxi_ns_db
 
@@ -228,25 +240,14 @@ do
 	local TaxiPath = ns.taxipath
 	local TaxiPathNode = ns.taxipathnode
 
+	-- The speeds that come with the `sim_` file of the game are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
+	local TAXI_SPEED_SCALE = (40 + 1/3) / 40
+
 	local Speed do
 
 		local TAXI_SPEED_FALLBACK = 30+1/3
-		local TAXI_SPEED_40 = 40+1/3
-		local TAXI_SPEED_50 = 50+5/12
 
-		local fallback = setmetatable({
-			[993] = TAXI_SPEED_50, -- Broken Isles
-			[1011] = TAXI_SPEED_40, -- Zandalar
-			[1014] = TAXI_SPEED_40, -- Kul Tiras
-			[1504] = TAXI_SPEED_50, -- Nazjatar
-			[1647] = TAXI_SPEED_40, -- Shadowlands
-			[1922] = TAXI_SPEED_50, -- Draenor
-			[2046] = TAXI_SPEED_50, -- Zereth Mortis
-			[2057] = TAXI_SPEED_50, -- Dragon Isles
-			[2175] = TAXI_SPEED_40, -- Zaralek Cavern
-			[2241] = TAXI_SPEED_50, -- Emerald Dream
-			[2276] = TAXI_SPEED_50, -- Khaz Algar
-		}, {
+		local fallback = setmetatable({}, {
 			__index = function()
 				return TAXI_SPEED_FALLBACK
 			end,
@@ -266,6 +267,11 @@ do
 				end
 			end,
 		})
+
+		-- the taxi maps that the game we run on was measured to fly at another speed
+		for areaID, speed in pairs(ns.AREA_SPEEDS or {}) do
+			fallback[areaID] = speed * TAXI_SPEED_SCALE
+		end
 
 		---@param areaID? number
 		---@param useLive? boolean
@@ -292,54 +298,10 @@ do
 		local RETRACE_REACH = 250 -- yards (seen from above) the stretch must reach away from the taxi node, on the path arriving and the path leaving together
 		local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongside the other before that stretch is skipped, fewer are left to the skip distance above
 
-		-- The game changes the flight speed as it passes the points of a path.
-		-- These speeds are not part of the client data, so they come from recorded flights.
-		local TAXI_SPEED_SCALE = (40 + 1/3) / 40
-
-		-- The speed flown from a point of a path until a later point of the path changes it, as `[pathId] = { [point index] = speed }`.
-		-- The first point of a path must have a speed.
-		---@type table<number, table<number, number>>
-		local PATH_SPEEDS = {
-			[7916] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 30 }, -- Oribos > Pridefall Hamlet, Revendreth
-			[7917] = { [1] = 15, [2] = 25, [3] = 40, [4] = 65, [5] = 100, [6] = 300, [11] = 100, [12] = 65, [13] = 40, [14] = 25 }, -- Pridefall Hamlet, Revendreth > Oribos
-			[8012] = { [1] = 15, [2] = 30, [3] = 50, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 25 }, -- Aspirant's Rest, Bastion > Oribos
-			[8013] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [8] = 300, [14] = 100, [17] = 65, [18] = 40, [19] = 25 }, -- Oribos > Aspirant's Rest, Bastion
-			[8318] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [7] = 300, [14] = 100, [15] = 65, [16] = 55, [17] = 50, [20] = 45, [21] = 40, [23] = 25 }, -- Oribos > Theater of Pain, Maldraxxus
-			[8319] = { [1] = 15, [2] = 25, [3] = 40, [4] = 50, [8] = 65, [10] = 300, [17] = 100, [18] = 65, [20] = 40, [21] = 25 }, -- Theater of Pain, Maldraxxus > Oribos
-			[8431] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [7] = 100, [8] = 300, [10] = 250, [11] = 200, [12] = 100, [14] = 40, [22] = 25 }, -- Oribos > Tirna Vaal, Ardenweald
-			[8432] = { [1] = 10, [2] = 25, [3] = 40, [11] = 65, [13] = 100, [14] = 300, [16] = 250, [17] = 200, [18] = 100, [20] = 65, [22] = 40, [23] = 25 }, -- Tirna Vaal, Ardenweald > Oribos
-			[8557] = { [1] = 25, [2] = 35, [3] = 45, [4] = 70, [5] = 100, [8] = 300, [15] = 155, [16] = 60, [17] = 40, [18] = 25 }, -- Oribos > Tazavesh, the Veiled Market
-			[8558] = { [1] = 25, [2] = 50, [4] = 300, [11] = 100, [13] = 65, [14] = 50, [15] = 45, [16] = 25 }, -- Tazavesh, the Veiled Market > Oribos
-			[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
-			[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps
-		}
-
-		---@class TaxiAreaRamp
-		---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
-		---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
-
-		-- Taxi maps where flights speed up after taking off and slow down before landing.
-		-- Paths in `PATH_SPEEDS` have their own speeds and do not use these.
-		---@type table<number, TaxiAreaRamp>
-		local AREA_RAMPS = {
-			[993] = { takeoff = { 15, 30, 40 }, landing = {} }, -- Broken Isles
-			[1011] = { takeoff = { 25, 25 }, landing = { 25, 15 } }, -- Zandalar
-			[1014] = { takeoff = { 25, 25 }, landing = { 25, 15 } }, -- Kul Tiras
-			[1647] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Shadowlands
-			[1922] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- Draenor
-			[2046] = { takeoff = { 25, 30, 40 }, landing = { 40, 30, 25 } }, -- Zereth Mortis
-			[2175] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Zaralek Cavern
-		}
-
-		-- Taxi maps where the flight is slower the closer the points are to each other, as `{ yards, speed }` in rising order:
-		-- a stretch between two points shorter than the yards is flown at the speed.
-		-- This is what fits the recorded flights best, the game does not tell us why it flies slower there.
-		-- Stretches with a speed from `PATH_SPEEDS` or `AREA_RAMPS` do not use these.
-		---@type table<number, number[][]>
-		local AREA_SPACING = {
-			[993] = { { 60, 15 }, { 100, 30 }, { 130, 40 } }, -- Broken Isles
-			[1922] = { { 80, 20 } }, -- Draenor
-		}
+		-- What the flights of the game we run on were measured to do comes with its `sim_` file, without any we fly at the speed of the taxi map all the way.
+		local pathSpeeds = ns.PATH_SPEEDS or {}
+		local areaRamps = ns.AREA_RAMPS or {}
+		local areaSpacing = ns.AREA_SPACING or {}
 
 		---@class TaxiPathSegment
 		---@field public points TaxiPathNode[]
@@ -552,7 +514,7 @@ do
 			local firstFlown = {} ---@type table<number, number> `[pathIndex] = index` of the first point of the path that is flown, if not all of it is
 			local lastFlown = {} ---@type table<number, number> `[pathIndex] = index` of the last point of the path that is flown, if not all of it is
 
-			for pathIndex = 1, numPaths - 1 do
+			for pathIndex = 1, ns.SKIP_RETRACED and numPaths - 1 or 0 do
 				local last, first = GetRetrace(paths[pathIndex], paths[pathIndex + 1])
 
 				if last and first then
@@ -636,7 +598,7 @@ do
 		---@param point TaxiPathNode
 		---@return number? speed
 		local function GetPathSpeed(point)
-			local speeds = PATH_SPEEDS[point.pathId]
+			local speeds = pathSpeeds[point.pathId]
 
 			if not speeds then
 				return
@@ -659,7 +621,7 @@ do
 		function GetPointSpeeds(points, areaID)
 			local speeds = {} ---@type (number|false)[]
 			local numPoints = #points
-			local ramp = areaID and AREA_RAMPS[areaID]
+			local ramp = areaID and areaRamps[areaID]
 			local isDynamic = false
 
 			for i = 1, numPoints do
@@ -689,7 +651,7 @@ do
 		---@param yards number
 		---@return number? speed
 		function GetSpacingSpeed(areaID, yards)
-			local spacing = areaID and AREA_SPACING[areaID]
+			local spacing = areaID and areaSpacing[areaID]
 
 			if not spacing then
 				return
@@ -928,6 +890,7 @@ do
 		---@field public version number Format of the record.
 		---@field public addon string Version of the addon.
 		---@field public project number Game client (`WOW_PROJECT_ID`).
+		---@field public flavor? TaxiFlavor The game the flight was recorded on, named like its db file.
 		---@field public build number Game build number.
 		---@field public time number Server time when the flight was taken.
 		---@field public area? number The taxi map.
@@ -1070,6 +1033,7 @@ do
 					version = RECORD_VERSION,
 					addon = C_AddOns.GetAddOnMetadata(addonName, "Version") or "",
 					project = WOW_PROJECT_ID,
+					flavor = ns.FLAVOR,
 					build = tonumber((select(2, GetBuildInfo()))) or 0,
 					time = GetServerTime(),
 					area = state.areaID,
@@ -1399,8 +1363,8 @@ do
 				if info.delay > 0 then
 					GameTooltip:AddLine(format("Stops: %d seconds %s", info.delay, info.delayIncluded and "" or "(not included)"), 0.8, 0.8, 0.8, false)
 				end
+				GameTooltip:AddLine(" ")
 			end
-			GameTooltip:AddLine(" ")
 			GameTooltip:AddLine(format("~ %s flight time", GetTimeStringFromSeconds(info.duration, false, true)), 1, 1, 1, false)
 			GameTooltip:Show()
 		end

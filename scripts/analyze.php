@@ -5,8 +5,8 @@ Compares the flights recorded by the addon against the taxi data, to show where 
 
 To record flights set `RECORD_FLIGHTS = true` at the top of `core.lua`, fly, then log out or reload so the saved variables are written.
 
-After the summary of the flights it lists the lines to add, change or remove in `core.lua` for its speeds to match what was flown.
-For this it reads the `TAXI_SPEED_` constants, the speed table of the taxi maps, `AREA_RAMPS`, `AREA_SPACING` and `PATH_SPEEDS` out of `core.lua`, so these need to keep their names and layout.
+After the summary of the flights it lists the lines to add, change or remove in the sim file of the game (`sim_mainline.lua`, `sim_forever.lua`, `sim_vanilla.lua` or `sim_classic.lua`) for its speeds to match what was flown.
+For this it reads `AREA_SPEEDS`, `AREA_RAMPS`, `AREA_SPACING` and `PATH_SPEEDS` out of that file, so these need to keep their names and layout.
 The speeds of a taxi map come first (its speed, how it takes off and lands, and if it flies slower where the points are close to each other), a path only gets its own speeds if it is still off by a few seconds with those.
 Some paths change the flight speed as they pass their points. These speeds are not part of the client files, so recorded flights are the only source for them.
 
@@ -18,10 +18,10 @@ Options:
 
 	--flight=N      show the details of flight N (as numbered in the summary), can be repeated
 	--all           show the details of every flight
-	--speeds        show the speed each path was flown at from each of its points, as lines for the PATH_SPEEDS table in core.lua
-	--core=FILE     the core.lua to suggest changes to (default is the one of this addon)
-	--no-suggest    do not show the suggested changes to core.lua
-	--client=NAME   use the csv files of this client (mainline, classic or vanilla) instead of what the flight was recorded on
+	--speeds        show the speed each path was flown at from each of its points, as lines for the PATH_SPEEDS table of the sim file
+	--sim=FILE      the sim file to suggest changes to (default is the one of this addon for the game the flights were recorded on)
+	--no-suggest    do not show the suggested changes to the sim file
+	--client=NAME   use the csv files of this client (mainline, forever, classic or vanilla) instead of what the flight was recorded on
 	--near=YARDS    how close we have to pass a point for it to count as flown (default 25)
 	--far=YARDS     how far from a point we have to stay for it to count as not flown (default 60)
 
@@ -888,7 +888,7 @@ $flights = array();
 $all = false;
 $speeds = false;
 $suggest = true;
-$coreFile = dirname(__DIR__) . DIRECTORY_SEPARATOR . "core.lua";
+$simFile = null;
 $client = null;
 $near = 25;
 $far = 60;
@@ -898,7 +898,7 @@ foreach (array_slice($argv, 1) as $arg) {
 	elseif ($arg === "--all") $all = true;
 	elseif ($arg === "--speeds") $speeds = true;
 	elseif ($arg === "--no-suggest") $suggest = false;
-	elseif (preg_match('/^--core=(.+)$/', $arg, $m)) $coreFile = $m[1];
+	elseif (preg_match('/^--sim=(.+)$/', $arg, $m)) $simFile = $m[1];
 	elseif (preg_match('/^--client=(\w+)$/', $arg, $m)) $client = $m[1];
 	elseif (preg_match('/^--near=([\d.]+)$/', $arg, $m)) $near = floatval($m[1]);
 	elseif (preg_match('/^--far=([\d.]+)$/', $arg, $m)) $far = floatval($m[1]);
@@ -910,7 +910,7 @@ foreach (array_slice($argv, 1) as $arg) {
 }
 
 if ($file === null || !is_file($file)) {
-	fprintf(STDERR, "usage: php %s <SavedVariables/TaxiTimer.lua> [--flight=N] [--all] [--speeds] [--core=FILE] [--no-suggest] [--client=mainline|classic|vanilla] [--near=25] [--far=60]\n", $argv[0]);
+	fprintf(STDERR, "usage: php %s <SavedVariables/TaxiTimer.lua> [--flight=N] [--all] [--speeds] [--sim=FILE] [--no-suggest] [--client=mainline|classic|vanilla] [--near=25] [--far=60]\n", $argv[0]);
 	exit(1);
 }
 
@@ -932,52 +932,46 @@ if (!is_array($records) || !count($records)) {
 // the csv files to compare a flight against, going by the client it was recorded on (WOW_PROJECT_ID)
 const SUGGEST_PATH_SECONDS = 5; // seconds a path must differ from the speed of its taxi map before it is suggested to have its own speeds
 
-// reads the speeds the addon uses out of core.lua, so what was flown can be compared to them
-function ReadCore($file) {
-	$core = array("constants" => array(), "speeds" => array(), "ramps" => array(), "spacing" => array(), "paths" => array(), "default" => 30);
+// reads the speeds the addon uses for a game out of its sim file, so what was flown can be compared to them
+function ReadSim($file) {
+	$sim = array("speeds" => array(), "ramps" => array(), "spacing" => array(), "paths" => array(), "default" => 30);
 	$src = @file_get_contents($file);
 	if ($src === false)
 		return null;
-	$block = function($start, $end) use ($src) {
-		$a = strpos($src, $start);
-		if ($a === false)
-			return "";
-		$b = strpos($src, $end, $a);
-		return $b === false ? "" : substr($src, $a, $b - $a);
+	$src = str_replace("\r", "", $src);
+	// the entries of a table, the tables are written as "ns.NAME = {" up to a "}" at the start of a line
+	$block = function($name) use ($src) {
+		return preg_match('/^ns\.' . $name . ' = \{$(.*?)^\}/ms', $src, $m) ? $m[1] : null;
 	};
-	// local TAXI_SPEED_40 = 40+1/3
-	preg_match_all('/local (TAXI_SPEED_\w+) = (\d+)(?:\s*\+\s*(\d+)\s*\/\s*(\d+))?\s*$/m', $src, $matches, PREG_SET_ORDER);
+	foreach (array("AREA_SPEEDS", "AREA_RAMPS", "AREA_SPACING", "PATH_SPEEDS") as $name)
+		if ($block($name) === null)
+			return null;
+	// [2057] = 50, -- Dragon Isles
+	preg_match_all('/^\s*\[(\d+)\]\s*=\s*(\d+)/m', $block("AREA_SPEEDS"), $matches, PREG_SET_ORDER);
 	foreach ($matches as $m)
-		$core["constants"][$m[1]] = FlightAnalysis::RoundSpeed($m[2] + (isset($m[3]) ? $m[3] / $m[4] : 0));
-	if (isset($core["constants"]["TAXI_SPEED_FALLBACK"]))
-		$core["default"] = $core["constants"]["TAXI_SPEED_FALLBACK"];
-	// [2057] = TAXI_SPEED_50, -- Dragon Isles
-	preg_match_all('/\[(\d+)\]\s*=\s*(TAXI_SPEED_\w+)/', $block("local fallback = setmetatable({", "}, {"), $matches, PREG_SET_ORDER);
-	foreach ($matches as $m)
-		if (isset($core["constants"][$m[2]]))
-			$core["speeds"][intval($m[1])] = $core["constants"][$m[2]];
+		$sim["speeds"][intval($m[1])] = intval($m[2]);
 	// [1647] = { takeoff = { 15, 25 }, landing = { 25 } },
-	preg_match_all('/\[(\d+)\]\s*=\s*\{\s*takeoff\s*=\s*\{([^}]*)\}\s*,\s*landing\s*=\s*\{([^}]*)\}/', $block("local AREA_RAMPS = {", "\n\t\t}"), $matches, PREG_SET_ORDER);
+	preg_match_all('/\[(\d+)\]\s*=\s*\{\s*takeoff\s*=\s*\{([^}]*)\}\s*,\s*landing\s*=\s*\{([^}]*)\}/', $block("AREA_RAMPS"), $matches, PREG_SET_ORDER);
 	foreach ($matches as $m)
-		$core["ramps"][intval($m[1])] = array(
+		$sim["ramps"][intval($m[1])] = array(
 			"takeoff" => array_map("intval", array_filter(array_map("trim", explode(",", $m[2])), "strlen")),
 			"landing" => array_map("intval", array_filter(array_map("trim", explode(",", $m[3])), "strlen")),
 		);
 	// [993] = { { 60, 15 }, { 100, 30 } },
-	preg_match_all('/^\s*\[(\d+)\]\s*=\s*\{((?:\s*\{\s*\d+\s*,\s*\d+\s*\}\s*,?)+)\s*\}/m', $block("local AREA_SPACING = {", "\n\t\t}"), $matches, PREG_SET_ORDER);
+	preg_match_all('/^\s*\[(\d+)\]\s*=\s*\{((?:\s*\{\s*\d+\s*,\s*\d+\s*\}\s*,?)+)\s*\}/m', $block("AREA_SPACING"), $matches, PREG_SET_ORDER);
 	foreach ($matches as $m) {
 		preg_match_all('/\{\s*(\d+)\s*,\s*(\d+)\s*\}/', $m[2], $steps, PREG_SET_ORDER);
 		foreach ($steps as $step)
-			$core["spacing"][intval($m[1])][] = array(intval($step[1]), intval($step[2]));
+			$sim["spacing"][intval($m[1])][] = array(intval($step[1]), intval($step[2]));
 	}
 	// [7917] = { [1] = 15, [2] = 25 },
-	preg_match_all('/^\s*\[(\d+)\]\s*=\s*\{((?:\s*\[\d+\]\s*=\s*\d+\s*,?)+)\s*\}/m', $block("local PATH_SPEEDS = {", "\n\t\t}"), $matches, PREG_SET_ORDER);
+	preg_match_all('/^\s*\[(\d+)\]\s*=\s*\{((?:\s*\[\d+\]\s*=\s*\d+\s*,?)+)\s*\}/m', $block("PATH_SPEEDS"), $matches, PREG_SET_ORDER);
 	foreach ($matches as $m) {
 		preg_match_all('/\[(\d+)\]\s*=\s*(\d+)/', $m[2], $points, PREG_SET_ORDER);
 		foreach ($points as $p)
-			$core["paths"][intval($m[1])][intval($p[1])] = intval($p[2]);
+			$sim["paths"][intval($m[1])][intval($p[1])] = intval($p[2]);
 	}
-	return $core;
+	return $sim;
 }
 
 // the speed flown from each of the points first to last, given the speeds set at some of them
@@ -1096,15 +1090,23 @@ function SpacingList($spacing) {
 	return implode(", ", array_map(function($step) { return sprintf("{ %d, %d }", $step[0], $step[1]); }, $spacing));
 }
 
-// compares what was flown to what core.lua has and prints what to change in it
-function SuggestChanges($analyses, $coreFile) {
-	$core = ReadCore($coreFile);
-	printf("\nSuggested changes to %s\n", $coreFile);
-	if (!$core || !count($core["constants"])) {
+// compares what was flown to what the sim files have and prints what to change in them
+function SuggestChanges($analyses, $simFile) {
+	$clients = array();
+	foreach ($analyses as $index => $a)
+		$clients[$a->data->client][$index] = $a;
+	foreach ($clients as $client => $flights)
+		SuggestClientChanges($flights, $simFile ?? dirname(__DIR__) . DIRECTORY_SEPARATOR . "sim_" . $client . ".lua");
+}
+
+// each game has a sim file of its own, as the flights of one game do not have to fly like those of another
+function SuggestClientChanges($analyses, $simFile) {
+	$core = ReadSim($simFile);
+	printf("\nSuggested changes to %s\n", $simFile);
+	if (!$core) {
 		print("  unable to read the speeds out of it, so there is nothing to compare the flights to\n");
 		return;
 	}
-	$names = array_flip(array_reverse($core["constants"], true)); // [speed] = constant
 	$maps = array();
 	foreach ($analyses as $index => $a) {
 		if ($a->incomplete || count($a->track) < 2 || !isset($a->record["area"]))
@@ -1131,14 +1133,11 @@ function SuggestChanges($analyses, $coreFile) {
 		$cruise = intval(array_key_first($info["time"]));
 		$now = $core["speeds"][$map] ?? $core["default"];
 		if ($cruise !== $now) {
-			$name = $names[$cruise] ?? null;
-			$out[] = sprintf("  speed: flown at %d, core.lua uses %d (%s)", $cruise, $now, isset($core["speeds"][$map]) ? "its entry in the speed table is wrong" : "it has no entry in the speed table");
+			$out[] = sprintf("  speed: flown at %d, the sim file uses %d (%s)", $cruise, $now, isset($core["speeds"][$map]) ? "its entry in AREA_SPEEDS is wrong" : "it has no entry in AREA_SPEEDS");
 			if ($cruise === $core["default"])
-				$out[] = sprintf("    remove from the speed table:    [%d] = ...", $map);
-			elseif ($name)
-				$out[] = sprintf("    %s the speed table:    [%d] = %s,", isset($core["speeds"][$map]) ? "change in" : "add to", $map, $name);
+				$out[] = sprintf("    remove from AREA_SPEEDS:    [%d] = ...", $map);
 			else
-				$out[] = sprintf("    there is no TAXI_SPEED constant for %d, add one (local TAXI_SPEED_%d = %d * (1 + 1/120)) and then to the speed table:    [%d] = TAXI_SPEED_%d,", $cruise, $cruise, $cruise, $map, $cruise);
+				$out[] = sprintf("    %s AREA_SPEEDS:    [%d] = %d,", isset($core["speeds"][$map]) ? "change in" : "add to", $map, $cruise);
 		}
 		// how the flights sped up after taking off and slowed down before landing
 		$takeoffs = array();
@@ -1178,7 +1177,15 @@ function SuggestChanges($analyses, $coreFile) {
 		if (!count($model["spacing"])) {
 			$takeoff = MostSeen($takeoffs, implode(", ", $model["takeoff"]));
 			$landing = MostSeen($landings, implode(", ", $model["landing"]));
-			if ($takeoff !== null && $landing !== null && ($takeoff !== implode(", ", $model["takeoff"]) || $landing !== implode(", ", $model["landing"]))) {
+			// what most flights did is not always what brings the estimates closest, so a taxi map that already has speeds for taking off and landing only gets others if they do
+			$better = true;
+			if ($takeoff !== null && $landing !== null && isset($core["ramps"][$map])) {
+				$other = $model;
+				$other["takeoff"] = array_map("intval", array_filter(explode(", ", $takeoff), "strlen"));
+				$other["landing"] = array_map("intval", array_filter(explode(", ", $landing), "strlen"));
+				$better = ModelError($flights, $other)[0] < ModelError($flights, $model)[0] - 0.25;
+			}
+			if ($better && $takeoff !== null && $landing !== null && ($takeoff !== implode(", ", $model["takeoff"]) || $landing !== implode(", ", $model["landing"]))) {
 				$describe = function($seen, $best) {
 					$others = array();
 					foreach ($seen as $key => $list)
@@ -1186,8 +1193,8 @@ function SuggestChanges($analyses, $coreFile) {
 							$others[] = sprintf("%s on flight %s", strval($key) === "" ? "none" : $key, implode(", ", $list));
 					return sprintf("%s on %d of %d flights%s", $best === "" ? "none" : $best, count($seen[$best]), array_sum(array_map("count", $seen)), count($others) ? " (" . implode("; ", $others) . ")" : "");
 				};
-				$out[] = sprintf("  speeds after taking off: %s, core.lua has %s", $describe($takeoffs, $takeoff), SpeedList($model["takeoff"]));
-				$out[] = sprintf("  speeds before landing: %s, core.lua has %s", $describe($landings, $landing), SpeedList($model["landing"]));
+				$out[] = sprintf("  speeds after taking off: %s, the sim file has %s", $describe($takeoffs, $takeoff), SpeedList($model["takeoff"]));
+				$out[] = sprintf("  speeds before landing: %s, the sim file has %s", $describe($landings, $landing), SpeedList($model["landing"]));
 				if ($takeoff === "" && $landing === "")
 					$out[] = sprintf("    remove from AREA_RAMPS:    [%d] = ...", $map);
 				else
@@ -1205,7 +1212,7 @@ function SuggestChanges($analyses, $coreFile) {
 			$fitted["spacing"] = FitSpacing($flights, $model);
 			list($fittedAverage, $fittedWorst) = ModelError($flights, $fitted);
 			if ($fitted["spacing"] !== $model["spacing"] && $fittedAverage <= $average - SPACING_MIN_SECONDS) {
-				$out[] = sprintf("  speeds by how close the points are: the %d flights are off by %.1f sec on average (%.1f at worst) with core.lua, and by %.1f sec (%.1f at worst) with these", count($flights), $average, $worst, $fittedAverage, $fittedWorst);
+				$out[] = sprintf("  speeds by how close the points are: the %d flights are off by %.1f sec on average (%.1f at worst) with the sim file, and by %.1f sec (%.1f at worst) with these", count($flights), $average, $worst, $fittedAverage, $fittedWorst);
 				if (count($fitted["spacing"]))
 					$out[] = sprintf("    %s AREA_SPACING:    [%d] = { %s },", isset($core["spacing"][$map]) ? "change in" : "add to", $map, SpacingList($fitted["spacing"]));
 				else
@@ -1261,7 +1268,7 @@ function SuggestChanges($analyses, $coreFile) {
 						$parts[] = sprintf("[%d] = %d", $point, $speed);
 					$pathLines[$path] = sprintf("    %s PATH_SPEEDS:    [%d] = { %s }, -- %s (flight %d, %s%s)", $had === null ? "add to" : "change in", $path, implode(", ", $parts), $name, $index, $text, count($flown["unsure"]) ? ", not sure about point " . implode(", ", $flown["unsure"]) : "");
 				} elseif (!isset($pathLines[$path])) {
-					$pathNotes[$path] = sprintf("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", $path, $name, $text, $had === null ? "" : " and differs from core.lua", $index, $flown["first"], $flown["last"], $count);
+					$pathNotes[$path] = sprintf("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", $path, $name, $text, $had === null ? "" : " and differs from the sim file", $index, $flown["first"], $flown["last"], $count);
 				}
 			}
 		}
@@ -1284,11 +1291,14 @@ function SuggestChanges($analyses, $coreFile) {
 	if ($small)
 		printf("\n  %d paths were off by 1 to %d sec with the speeds of their taxi map and are left alone\n", $small, SUGGEST_PATH_SECONDS);
 	if (!$changes)
-		print("\n  core.lua already matches what was flown\n");
+		print("\n  the sim file already matches what was flown\n");
 	print("\n  the speeds are compared rounded to the nearest 5, and the time spent loading another map is left out of how long a flight took\n");
 }
 
 function GetClient($record) {
+	// newer records say which game they are from, named like its csv folder
+	if (isset($record["flavor"]) && is_string($record["flavor"]))
+		return $record["flavor"];
 	$project = $record["project"] ?? 1;
 	if ($project === 1) return "mainline";
 	if ($project === 2) return "vanilla";
@@ -1349,7 +1359,7 @@ foreach ($areas as $key => $area) {
 }
 
 if ($suggest)
-	SuggestChanges($analyses, $coreFile);
+	SuggestChanges($analyses, $simFile);
 
 $shown = 0;
 foreach ($analyses as $index => $a) {
@@ -1392,7 +1402,7 @@ if ($speeds) {
 				$notes[] = "not sure about point " . implode(", ", $info["unsure"]);
 			if ($a->incomplete)
 				$notes[] = "incomplete";
-			$lines[] = array($path, $index, sprintf("\t\t\t[%d] = { %s }, -- %s (%s)", $path, implode(", ", $parts), $names[$a->data->client][$path] ?? "?", implode(", ", $notes)));
+			$lines[] = array($path, $index, sprintf("\t[%d] = { %s }, -- %s (%s)", $path, implode(", ", $parts), $names[$a->data->client][$path] ?? "?", implode(", ", $notes)));
 		}
 	}
 	usort($lines, function($a, $b) { return $a[0] <=> $b[0] ?: $a[1] <=> $b[1]; });
