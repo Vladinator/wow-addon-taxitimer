@@ -253,6 +253,7 @@ class FlightAnalysis {
 	public $hasOverride = false;
 
 	private $pathSpeeds = null;
+	private $routeMaps = array(); // [map] = true for the maps the points of the flight are on
 	private $intervals = array();
 
 	public $moveTime = 0;
@@ -268,6 +269,9 @@ class FlightAnalysis {
 		$this->data = $data;
 		$this->near = $near;
 		$this->far = $far;
+		foreach ($record["points"] ?? array() as $id)
+			if (isset($data->points[$id]))
+				$this->routeMaps[$data->points[$id][3]] = true;
 		$this->BuildTrack();
 		$this->BuildTimes();
 		$this->CheckComplete();
@@ -286,7 +290,7 @@ class FlightAnalysis {
 			$a = $this->track[$i - 1];
 			$b = $this->track[$i];
 			$dt = $b[0] - $a[0];
-			$d = $a[3] === $b[3] ? hypot($b[1] - $a[1], $b[2] - $a[2]) : INF;
+			$d = $this->SameMap($a[3], $b[3]) || $this->SameMap($b[3], $a[3]) ? hypot($b[1] - $a[1], $b[2] - $a[2]) : INF;
 			$speed = $b[4];
 			$expected = max($speed, $a[4], 30) * $dt;
 			if ($d > max(60, $expected * 3)) {
@@ -324,12 +328,18 @@ class FlightAnalysis {
 		}
 	}
 
+	// if a position the game gave us on one map can be compared to a point on another
+	// the game can be on a map of its own that shares its positions with the map the points are on (like Tanaan Jungle and Draenor), which it can not be if the flight has points on that map as well
+	private function SameMap($seen, $map) {
+		return $seen === $map || !isset($this->routeMaps[$seen]);
+	}
+
 	private function NearestRoutePoint($x, $y, $map) {
 		$best = INF;
 		foreach ($this->record["points"] ?? array() as $id) {
 			if (!isset($this->data->points[$id])) continue;
 			$p = $this->data->points[$id];
-			if ($p[3] !== $map) continue;
+			if (!$this->SameMap($map, $p[3])) continue;
 			$best = min($best, hypot($p[0] - $x, $p[1] - $y));
 		}
 		return $best === INF ? 100000 : $best;
@@ -360,7 +370,7 @@ class FlightAnalysis {
 		} elseif (isset($this->data->points[$points[count($points)] ?? 0])) {
 			$p = $this->data->points[$points[count($points)]];
 			$last = $this->track[$count - 1];
-			$distance = $p[3] === $last[3] ? hypot($p[0] - $last[1], $p[1] - $last[2]) : INF;
+			$distance = $this->SameMap($last[3], $p[3]) ? hypot($p[0] - $last[1], $p[1] - $last[2]) : INF;
 			if ($distance > max($this->far, 100))
 				$this->incomplete = ($early ? $early . " and " : "") . ($distance === INF ? "ended on another map than the destination" : sprintf("ended %.0f yd from the destination", $distance));
 			elseif ($early)
@@ -438,7 +448,7 @@ class FlightAnalysis {
 		$count = count($this->track);
 		for ($i = 0; $i < $count; $i++) {
 			$b = $this->track[$i];
-			if ($b[3] !== $map) continue;
+			if (!$this->SameMap($b[3], $map)) continue;
 			$best = min($best, hypot($b[1] - $x, $b[2] - $y));
 			if ($i === 0 || $this->steps[$i][3] === "jump") continue;
 			$a = $this->track[$i - 1];
@@ -579,7 +589,7 @@ class FlightAnalysis {
 			$seen = array();
 			$at = 0;
 			foreach ($this->track as $s) {
-				if ($s[7] < $segment["first"] || $s[7] > $segment["last"] || $s[3] !== $d->points[$ids[0]][3])
+				if (!$this->SameMap($s[3], $d->points[$ids[0]][3]))
 					continue;
 				$best = null;
 				for ($k = $at; $k < min(count($curve) - 1, $at + 40); $k++) {
@@ -591,8 +601,8 @@ class FlightAnalysis {
 					if ($best === null || $distance < $best[0] - 0.000001)
 						$best = array($distance, $k, $t);
 				}
-				if ($best === null)
-					continue;
+				if ($best === null || $best[0] > 150)
+					continue; // too far away to be on this part of the flight
 				$at = $best[1];
 				if ($s[4] >= 1)
 					$seen[] = array($s[0], $along[$at] + ($along[$at + 1] - $along[$at]) * $best[2], $s[4]);

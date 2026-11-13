@@ -235,9 +235,9 @@ do
 		local TAXI_SPEED_50 = 50+5/12
 
 		local fallback = setmetatable({
-			[1116] = TAXI_SPEED_40, -- Draenor
 			[993] = TAXI_SPEED_50, -- Broken Isles
 			[1647] = TAXI_SPEED_40, -- Shadowlands
+			[1922] = TAXI_SPEED_50, -- Draenor
 			[2046] = TAXI_SPEED_50, -- Zereth Mortis
 			[2057] = TAXI_SPEED_50, -- Dragon Isles
 			[2175] = TAXI_SPEED_40, -- Zaralek Cavern
@@ -316,6 +316,7 @@ do
 		local AREA_RAMPS = {
 			[993] = { takeoff = { 15, 30, 40 }, landing = {} }, -- Broken Isles
 			[1647] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Shadowlands
+			[1922] = { takeoff = { 15, 30, 40 }, landing = { 40, 30 } }, -- Draenor
 			[2046] = { takeoff = { 25, 30, 40 }, landing = { 40, 30, 25 } }, -- Zereth Mortis
 			[2175] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Zaralek Cavern
 		}
@@ -641,6 +642,7 @@ do
 		---@field public points TaxiPathNode[]
 		---@field public segments TaxiPathSegment[]
 		---@field public steps FlightStep[] The stretches between the points in the order they are flown.
+		---@field public maps table<number, boolean> The maps the points are on.
 		---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
 		---@field public donotadjustarrivaltime? boolean
 
@@ -685,6 +687,10 @@ do
 				end
 			end
 			local points, segments, delay = GetPointsFromNodes(nodes)
+			local maps = {} ---@type table<number, boolean>
+			for i = 1, #points do
+				maps[points[i].map] = true
+			end
 			local areaSpeed = Speed(areaID)
 			local speeds, isDynamic = GetPointSpeeds(points, areaID)
 			local steps = {} ---@type FlightStep[]
@@ -738,6 +744,7 @@ do
 					points = points,
 					segments = segments,
 					steps = steps,
+					maps = maps,
 					dynamicSpeed = isDynamic,
 				}
 				if INCLUDE_STOP_DELAYS then
@@ -757,7 +764,7 @@ do
 			for i = 1, #steps do
 				local step = steps[i]
 				if distance >= step.distanceLeft then
-					return step.durationLeft + math.min(distance - step.distanceLeft, step.distance) / step.speed
+					return step.durationLeft + min(distance - step.distanceLeft, step.distance) / step.speed
 				end
 			end
 			return 0
@@ -920,6 +927,10 @@ do
 			local points = flight.info.points
 			local numPoints = #points
 			local record = flight.record
+			-- a map the points are not on shares its positions with the map they are on
+			if mapID and not flight.info.maps[mapID] then
+				mapID = nil
+			end
 			if record.swapAxis == nil then
 				-- the first time we make sure our position and the points agree on what is x and what is y
 				local _, distance = GetNearestPoint(points, 1, numPoints, x, y, mapID)
@@ -930,7 +941,7 @@ do
 				x, y = y, x
 			end
 			local first = flight.pointIndex or 1
-			local index, distance = GetNearestPoint(points, first, math.min(numPoints, first + RECORD_SEARCH_AHEAD), x, y, mapID)
+			local index, distance = GetNearestPoint(points, first, min(numPoints, first + RECORD_SEARCH_AHEAD), x, y, mapID)
 			if not index or distance > RECORD_LOST_DISTANCE * RECORD_LOST_DISTANCE then
 				index = GetNearestPoint(points, first, numPoints, x, y, mapID) or index
 			end
@@ -1091,7 +1102,7 @@ do
 		---@field public earlyLanding? boolean If we asked to land early at the next taxi node.
 
 		local TAXI_MAX_MAP_CHANGE = 30 -- seconds we wait for a flight to carry on after it left the taxi on its way to another map (the game takes us off the taxi while the next map loads)
-		local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards that must be left of the flight for it to be on its way to another map and not at its destination
+		local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards we must be away from the destination for the flight to be on its way to another map and not have ended
 		local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
 
 		local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
@@ -1115,7 +1126,18 @@ do
 				return false
 			end
 			local destination = info.points[#info.points]
-			return destination ~= nil and destination.map ~= gps.lastMapID and gps.distance > TAXI_MAX_MAP_CHANGE_DISTANCE and GetTime() - gps.lastOnTaxi < TAXI_MAX_MAP_CHANGE
+			if not destination or destination.map == gps.lastMapID or GetTime() - gps.lastOnTaxi >= TAXI_MAX_MAP_CHANGE then
+				return false
+			end
+			-- the game can be on a map of its own that shares its positions with the map of the points (like Tanaan Jungle and Draenor), so being on another map than the destination does not tell us that we are not there yet
+			-- where we were last seen does, and it does not drift like the distance we think is left
+			local x, y = gps.lastX, gps.lastY
+			if not x or not y then
+				return gps.distance > TAXI_MAX_MAP_CHANGE_DISTANCE
+			end
+			local dx, dy = destination.x - x, destination.y - y
+			local sx, sy = destination.x - y, destination.y - x -- our position can have x and y the other way around
+			return min(dx * dx + dy * dy, sx * sx + sy * sy) > TAXI_MAX_MAP_CHANGE_DISTANCE * TAXI_MAX_MAP_CHANGE_DISTANCE
 		end
 
 		-- asking to land early ends the flight at the next taxi node, which can be on a map before the one of the destination
@@ -1164,11 +1186,12 @@ do
 					GPSInfo.speed = Speed(state.areaID, true)
 					GPSInfo.x, GPSInfo.y, GPSInfo.z, GPSInfo.mapID = UnitPosition("player")
 					if GPSInfo.lastSpeed then
-						if GPSInfo.mapID and GPSInfo.lastMapID and GPSInfo.mapID ~= GPSInfo.lastMapID then
+						-- going from one map of the points to another the positions do not compare, but a map the points are not on shares its positions with the map they are on
+						if GPSInfo.mapID and GPSInfo.lastMapID and GPSInfo.mapID ~= GPSInfo.lastMapID and info.maps[GPSInfo.mapID] and info.maps[GPSInfo.lastMapID] then
 							GPSInfo.lastX = nil
 						end
 						if GPSInfo.lastX then
-							GPSInfo.distance = GPSInfo.distance - math.sqrt((GPSInfo.lastX - GPSInfo.x)^2 + (GPSInfo.lastY - GPSInfo.y)^2) * travelScale
+							GPSInfo.distance = GPSInfo.distance - sqrt((GPSInfo.lastX - GPSInfo.x)^2 + (GPSInfo.lastY - GPSInfo.y)^2) * travelScale
 							GPSInfo.distancePercent = GPSInfo.distance / info.distance
 							if GPSInfo.distance > 0 and GPSInfo.speed > 0 then
 								local timeCorrection = TAXI_TIME_CORRECT
@@ -1188,7 +1211,7 @@ do
 										timeCorrection = true
 										-- set next checkpoint, and calculate time difference
 										gpsInfoTimeCorrection.progress = gpsInfoTimeCorrection.progress - gpsInfoTimeCorrection.chunk
-										gpsInfoTimeCorrection.difference = math.floor(Timer:Get() - GPSInfo.timeLeft)
+										gpsInfoTimeCorrection.difference = floor(Timer:Get() - GPSInfo.timeLeft)
 										-- check if time difference is within acceptable boundaries
 										if TAXI_TIME_CORRECT_IGNORE > 0 and abs(gpsInfoTimeCorrection.difference) < TAXI_TIME_CORRECT_IGNORE then
 											timeCorrection = false
@@ -1196,7 +1219,7 @@ do
 											gpsInfoTimeCorrection.adjustments = gpsInfoTimeCorrection.adjustments + gpsInfoTimeCorrection.difference
 											-- announce the stopwatch time adjustments if significant enough to be noteworthy, and if we have more than just one interval (we then just summarize at the end)
 											if not info.donotadjustarrivaltime and not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
-												DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. math.abs(gpsInfoTimeCorrection.difference) .. " seconds|r.", 1, 1, 0)
+												DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. abs(gpsInfoTimeCorrection.difference) .. " seconds|r.", 1, 1, 0)
 											end
 										end
 									end
@@ -1225,7 +1248,7 @@ do
 					Recorder:Stop()
 					-- announce the time adjustments, if any
 					if not TAXI_TIME_CORRECT_MUTE_SUMMARY and GPSInfo.timeCorrection then
-						local absAdjustments = math.abs(GPSInfo.timeCorrection.adjustments)
+						local absAdjustments = abs(GPSInfo.timeCorrection.adjustments)
 						if absAdjustments > TAXI_TIME_CORRECT_IGNORE then
 							DEFAULT_CHAT_FRAME:AddMessage("Your trip was |cffFFFFFF" .. absAdjustments .. " seconds|r " .. (GPSInfo.timeCorrection.adjustments < 0 and "longer" or "shorter") .. " than indicated.", 1, 1, 0)
 						end
@@ -1280,24 +1303,22 @@ do
 				return
 			end
 			if SHOW_EXTRA_DEBUG_INFO then
-				local pathIds = {}
 				GameTooltip:AddLine(" ")
 				for i = 1, #info.nodes do
 					local node = info.nodes[i]
-					local pathId = pathIds[i]
-					GameTooltip:AddLine(i .. ". " .. node.name .. (pathId and " (" .. pathId .. ")" or ""), .8, .8, .8, false)
+					GameTooltip:AddLine(format("%d. %s", i, node.name), 0.8, 0.8, 0.8, false)
 				end
 				GameTooltip:AddLine(" ")
-				GameTooltip:AddLine("Number of nodes: " .. #info.nodes, .8, .8, .8, false)
-				GameTooltip:AddLine("Number of points: " .. #info.points, .8, .8, .8, false)
-				GameTooltip:AddLine("Approx. speed: " .. info.speed, .8, .8, .8, false)
-				GameTooltip:AddLine("Distance: ~ " .. info.distance .. " yards", .8, .8, .8, false)
+				GameTooltip:AddLine(format("Number of nodes: %d", #info.nodes), 0.8, 0.8, 0.8, false)
+				GameTooltip:AddLine(format("Number of points: %d", #info.points), 0.8, 0.8, 0.8, false)
+				GameTooltip:AddLine(format("Speed: ~ %.1f", info.speed), 0.8, 0.8, 0.8, false)
+				GameTooltip:AddLine(format("Distance: ~ %.1f yards", info.distance), 0.8, 0.8, 0.8, false)
 				if info.delay > 0 then
-					GameTooltip:AddLine("Stops: " .. info.delay .. " seconds" .. (info.delayIncluded and "" or " (not included)"), .8, .8, .8, false)
+					GameTooltip:AddLine(format("Stops: %d seconds %s", info.delay, info.delayIncluded and "" or "(not included)"), 0.8, 0.8, 0.8, false)
 				end
 			end
 			GameTooltip:AddLine(" ")
-			GameTooltip:AddLine("~ " .. GetTimeStringFromSeconds(info.duration, false, true) .. " flight time", 1, 1, 1, false)
+			GameTooltip:AddLine(format("~ %s flight time", GetTimeStringFromSeconds(info.duration, false, true)), 1, 1, 1, false)
 			GameTooltip:Show()
 		end
 
