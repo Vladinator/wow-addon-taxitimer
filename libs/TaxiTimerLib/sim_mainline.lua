@@ -28,6 +28,8 @@ sim.AREA_SPEEDS = {
 	[2241] = 50, -- Emerald Dream
 	[2276] = 50, -- Khaz Algar
 	[2374] = 50, -- Undermine
+	[2401] = 50, -- Founder's Point
+	[2402] = 50, -- Razorwind Shores
 }
 
 -- Taxi nodes where the game flies into the node and back out when passing through it, whole paths, however much the paths in and out run alongside each other (see `SKIP_RETRACED`).
@@ -40,8 +42,18 @@ sim.RETRACE_EXCEPTIONS = {
 -- `[node] = { [from] = { [to] = { last, first } } }` when flying from the taxi node `from` past `node` to the taxi node `to`:
 -- `last` is the last point that is flown of the path arriving at `node`, and `first` the first point that is flown of the path leaving it.
 sim.NODE_JOINS = {
+	[1382] = { -- Twilight Glade, Shadowmoon Valley
+		[1509] = { [1467] = { 8, 1 } }, -- Talon Watch, Spires of Arak > The Draakorium, Shadowmoon Valley
+	},
+	[1506] = { -- Telaari Station, Nagrand
+		[1503] = { [1573] = { 7, 7 } }, -- Throne of the Elements, Nagrand > Nivek's Overlook, Nagrand
+	},
 	[2904] = { -- Eye of Ysera, The Emerald Dream
 		[2903] = { [2905] = { 11, 7 } }, -- Verdant Landing, The Emerald Dream > Wellspring Overlook, The Emerald Dream
+	},
+	[3076] = { -- Small Aerie, Founder's Point
+		[3074] = { [3078] = { 6, 5 } }, -- Mear's Farm, Founder's Point > Brumewood Hollow, Founder's Point
+		[3075] = { [3073] = { 6, 4 } }, -- The Outer Banks, Founder's Point > Town Center, Founder's Point
 	},
 	[3133] = { -- Fairbreeze Village, Eversong Woods
 		[3134] = { [3131] = { 7, 6 } }, -- Tranquillien, Eversong Woods > Sanctum of Light, Silvermoon City
