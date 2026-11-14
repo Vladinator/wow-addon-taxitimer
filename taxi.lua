@@ -221,6 +221,99 @@ local function GetTaxiPath(from, to)
 	return GetTaxiPathNodes(pathId)
 end
 
+local MAX_BRIDGE_HOPS = 4 -- paths a trip between two taxi nodes can be made of when the game does not tell us the taxi nodes in between
+local bridges = {} ---@type table<number, table<number, number[]|false>> `[from][to] = taxi nodes` of the trip from one taxi node to the other, including both
+local neighbours = {} ---@type table<number, number[]> The taxi nodes there is a path to from a taxi node, in rising order.
+
+---@param nodeId number
+---@return number[]
+local function GetNeighbours(nodeId)
+	local list = neighbours[nodeId]
+
+	if not list then
+		list = {}
+
+		for toId in pairs(pathLookup[nodeId] or {}) do
+			list[#list + 1] = toId
+		end
+
+		table.sort(list) -- the same trip in every version of Lua
+		neighbours[nodeId] = list
+	end
+
+	return list
+end
+
+-- Some taxi nodes are never shown on the taxi map, they are only passed on the way (like the tunnels into Zaralek Cavern), so a trip can have taxi nodes in between that the game does not give us.
+-- When there is no path between two taxi nodes, this finds the trip with the fewest paths that does it, and only if there is one such trip. Every path of it is one of the paths of the game files.
+---@param from number
+---@param to number
+---@return number[]? nodeIds The taxi nodes of the trip in the order they are flown, `from` and `to` included.
+local function GetTaxiBridge(from, to)
+	if not hasLookup then
+		BuildLookup()
+	end
+
+	local cached = bridges[from]
+
+	if cached and cached[to] ~= nil then
+		return cached[to] or nil
+	end
+
+	local previous = { [from] = false } ---@type table<number, number|false>
+	local queue = { from }
+	local depth = { [from] = 0 }
+	local trips = { [from] = 1 } ---@type table<number, number> How many trips with the fewest paths lead to each taxi node.
+	local head = 1
+
+	-- breadth first, so the trip found has the fewest paths
+	while head <= #queue do
+		local current = queue[head]
+		head = head + 1
+
+		if depth[current] < MAX_BRIDGE_HOPS and current ~= to then
+			local list = GetNeighbours(current)
+
+			for i = 1, #list do
+				local nextId = list[i]
+
+				if depth[nextId] == nil then
+					previous[nextId] = current
+					depth[nextId] = depth[current] + 1
+					trips[nextId] = 0
+					queue[#queue + 1] = nextId
+				end
+
+				if depth[nextId] == depth[current] + 1 then
+					trips[nextId] = trips[nextId] + trips[current]
+				end
+			end
+		end
+	end
+
+	local trip = false ---@type number[]|false
+
+	-- the trip is only used when it is the only way (with the fewest paths) between the two, otherwise we would be guessing which way the game flew
+	if trips[to] == 1 then
+		trip = {}
+
+		local at = to ---@type number|false
+
+		while at do
+			table.insert(trip, 1, at)
+			at = previous[at]
+		end
+	end
+
+	if not cached then
+		cached = {}
+		bridges[from] = cached
+	end
+
+	cached[to] = trip
+	return trip or nil
+end
+
 ---@param node TaxiPathNode
 local function IsTeleport(node)
 	return HasFlag(node.flags, TAXI_PATH_NODE_FLAG_TELEPORT)
@@ -399,6 +492,19 @@ local function GetPointsFromNodes(nodes)
 			paths[#paths + 1] = path
 			nodeIds[#paths] = to.nodeID
 			fromIds[#paths] = from.nodeID
+		elseif from.nodeID ~= to.nodeID then
+			-- no path between the two, so the game flew through taxi nodes it does not show
+			local trip = GetTaxiBridge(from.nodeID, to.nodeID) or {}
+
+			for j = 2, #trip do
+				local hop = GetTaxiPath(trip[j - 1], trip[j])
+
+				if hop and hop[1] then
+					paths[#paths + 1] = hop
+					nodeIds[#paths] = trip[j]
+					fromIds[#paths] = trip[j - 1]
+				end
+			end
 		end
 	end
 

@@ -29,8 +29,9 @@ end
 ---@param from? TaxiNodeInfo
 ---@param to? TaxiNodeInfo
 ---@param areaID? number
+---@param otherNodes? TaxiNodeInfo[] The taxi nodes of the other taxi map that is shown, for the slots the taxi map we are on does not have.
 ---@return FlightInfo?
-local function GetFlightInfo(taxiNodes, from, to, areaID)
+local function GetFlightInfo(taxiNodes, from, to, areaID, otherNodes)
 	if not from or not to or from == to then
 		return
 	end
@@ -41,23 +42,39 @@ local function GetFlightInfo(taxiNodes, from, to, areaID)
 	if type(numRoutes) ~= "number" then
 		return -- the taxi map is not open
 	end
+	local numMissing = 0
 	for routeIndex = 1, numRoutes do
 		---@type number
 		local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic expect-line: assign-type-mismatch, redundant-parameter
 		---@type number
 		local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false) ---@diagnostic expect-line: assign-type-mismatch, redundant-parameter
-		local sourceNode = taxiNodes[sourceSlotIndex]
-		local destinationNode = taxiNodes[destinationSlotIndex]
-		if sourceNode and destinationNode then
-			if not nodes[sourceNode] then
-				nodes[sourceNode] = true
-				table.insert(nodes, sourceNode)
-			end
-			if not nodes[destinationNode] then
-				nodes[destinationNode] = true
-				table.insert(nodes, destinationNode)
+		local sourceNode = taxiNodes[sourceSlotIndex] or (otherNodes and otherNodes[sourceSlotIndex])
+		local destinationNode = taxiNodes[destinationSlotIndex] or (otherNodes and otherNodes[destinationSlotIndex])
+		-- taxi nodes that are never shown on the taxi map (like the tunnels into Zaralek Cavern) are not in the list, so only the ones we have are used and the simulation finds the way between them
+		if sourceNode and not nodes[sourceNode] then
+			nodes[sourceNode] = true
+			table.insert(nodes, sourceNode)
+		end
+		if destinationNode and not nodes[destinationNode] then
+			nodes[destinationNode] = true
+			table.insert(nodes, destinationNode)
+		end
+		numMissing = numMissing + (sourceNode and 0 or 1) + (destinationNode and 0 or 1)
+	end
+	-- the start and the destination are known even if the taxi map has no slot for them (the destination can be on another taxi map than the one we are on)
+	local function HasNode(node)
+		for i = 1, #nodes do
+			if nodes[i].nodeID == node.nodeID then
+				return true
 			end
 		end
+		return false
+	end
+	if not HasNode(from) then
+		table.insert(nodes, 1, from)
+	end
+	if not HasNode(to) then
+		nodes[#nodes + 1] = to
 	end
 	return GetFlightInfoFromNodes(nodes, areaID)
 end
@@ -553,19 +570,22 @@ local State do
 	---@field public areaID? number
 	---@field public from? TaxiNodeInfo
 	---@field public to? TaxiNodeInfo
-	---@field public nodes TaxiNodeInfo[]
+	---@field public nodes TaxiNodeInfo[] The taxi nodes by slot of the current taxi map.
+	---@field public otherNodes table<number, TaxiNodeInfo> The taxi nodes by slot of the other taxi map that is shown, for the slots `nodes` does not have.
+	---@field public otherMaps table<number, boolean> The taxi maps `otherNodes` was filled from.
+	---@field public otherConflict? boolean If the slots of another taxi map are not the same as the ones of the taxi map we are on, so they can not be used.
 	---@field public gps? FunctionContainer
 
 	---@class TaxiButton : Button
 	---@field public taxiNodeData TaxiNodeInfo
 
-	State = { nodes = {} }
+	State = { nodes = {}, otherNodes = {}, otherMaps = {} }
 
 	---@param button TaxiButton
 	function State:UpdateButton(button)
 		self:Update()
 		if button.taxiNodeData then
-			self.to = self.nodes[button.taxiNodeData.slotIndex]
+			self.to = self.nodes[button.taxiNodeData.slotIndex] or button.taxiNodeData
 		else
 			self.to = self.nodes[button:GetID()]
 		end
@@ -578,6 +598,13 @@ local State do
 	function State:ButtonTooltip(button)
 		local info = self:GetFlightInfo()
 		if not info then
+			if SHOW_EXTRA_DEBUG_INFO then
+				GameTooltip:AddLine(" ")
+				GameTooltip:AddLine(format("No taxi data for map: %s (%d nodes)", tostring(self.areaID), #self.nodes), 0.8, 0.8, 0.8, true)
+				GameTooltip:AddLine(format("From: %s", self.from and self.from.name or "N/A"), 0.8, 0.8, 0.8, true)
+				GameTooltip:AddLine(format("To: %s", self.to and self.to.name or "N/A"), 0.8, 0.8, 0.8, true)
+				GameTooltip:Show()
+			end
 			return
 		end
 		if SHOW_EXTRA_DEBUG_INFO then
@@ -608,9 +635,33 @@ local State do
 		GPS:Start(self, info)
 	end
 
+	function State:AddShownMap()
+		local frame = _G["FlightMapFrame"] ---@type { GetMapID?: fun(self: table): number? }?
+		local mapID = frame and frame.GetMapID and frame:GetMapID()
+		if type(mapID) ~= "number" or mapID == self.areaID or self.otherMaps[mapID] then
+			return
+		end
+		self.otherMaps[mapID] = true
+		local nodes = C_TaxiMap.GetAllTaxiNodes(mapID)
+		for i = 1, #nodes do
+			local node = nodes[i]
+			local known = self.nodes[node.slotIndex]
+			if known and known.nodeID ~= node.nodeID then
+				-- the slots mean something else on the other taxi map, so none of them can be used
+				table.wipe(self.otherNodes)
+				self.otherConflict = true
+				return
+			end
+			if not known and not self.otherConflict then
+				self.otherNodes[node.slotIndex] = node
+			end
+		end
+	end
+
 	---@return FlightInfo?
 	function State:GetFlightInfo()
-		return GetFlightInfo(self.nodes, self.from, self.to, self.areaID)
+		self:AddShownMap()
+		return GetFlightInfo(self.nodes, self.from, self.to, self.areaID, self.otherNodes)
 	end
 
 	function State:IsValidState()
@@ -619,11 +670,16 @@ local State do
 
 	---@param forceUpdate? boolean
 	function State:Update(forceUpdate)
-		if not forceUpdate and self:IsValidState() then
+		local areaID = GetTaxiMapID()
+		if not forceUpdate and self:IsValidState() and areaID == self.areaID then
 			return
 		end
-		self.areaID, self.from, self.to = GetTaxiMapID(), nil, nil
+		local from = not forceUpdate and self.from or nil
+		self.areaID, self.from, self.to = areaID, from, nil
 		table.wipe(self.nodes)
+		table.wipe(self.otherNodes)
+		table.wipe(self.otherMaps)
+		self.otherConflict = nil
 		if not self.areaID then
 			return
 		end

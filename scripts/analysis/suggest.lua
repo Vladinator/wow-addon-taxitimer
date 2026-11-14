@@ -32,6 +32,7 @@ return function(ctx)
 	local SPACING_YARDS = { 30, 45, 60, 80, 100, 130, 170, 220, 300 } -- the lengths a stretch between two points is sorted by when looking for the speed it is flown at
 	local SPACING_MIN_FLIGHTS = 5 -- flights needed on a taxi map before speeds by the length of the stretches are suggested for it
 	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
+	local PATH_MIN_SEEN = 0.6 -- how much of a path must have been seen in flight for it to be given speeds of its own
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
 	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
 	local JOIN_MIN_SECONDS = 3 -- seconds a flight must get closer to its estimate before another way of flying past a taxi node is suggested
@@ -661,7 +662,10 @@ return function(ctx)
 						else
 							out[#out + 1] = format("    remove from NODE_SPEEDS:    [%d] = ... -- %s (the %d flight%s from it fly like the rest of the taxi map)", node, name, count, count == 1 and "" or "s")
 						end
-						restores[#restores + 1] = override(ns, "NODE_SPEEDS", node, wanted)
+						-- a speed seen on one flight is not written, so the paths of that flight are looked at without it (otherwise it would hide what its paths need)
+						if count >= 2 or not wanted then
+							restores[#restores + 1] = override(ns, "NODE_SPEEDS", node, wanted)
+						end
 					end
 				end
 			end
@@ -688,17 +692,22 @@ return function(ctx)
 						local flown = paths[path]
 						local stretches = byPath[path]
 						if stretches then
-							local observed, predicted, seen = 0, 0, true
+							-- the stretches we did not see (where the flight changed map, or was too far away to be sure) are left out, what is seen is scaled up to the whole path
+							local observed, predicted, seenYards, totalYards = 0, 0, 0, 0
 							for _, stretch in ipairs(stretches) do
-								if not stretch.interval.speed then
-									seen = false -- we did not see how fast all of it was flown
-									break
+								totalYards = totalYards + stretch.interval.yards
+								if stretch.interval.speed then
+									seenYards = seenYards + stretch.interval.yards
+									observed = observed + stretch.interval.yards / (stretch.interval.speed * scale)
+									predicted = predicted + (stretch.step and stretch.step.distance / stretch.step.speed or 0)
 								end
-								observed = observed + stretch.interval.yards / (stretch.interval.speed * scale)
-								predicted = predicted + (stretch.step and stretch.step.distance / stretch.step.speed or 0)
+							end
+							local seen = totalYards == 0 or seenYards >= totalYards * PATH_MIN_SEEN
+							if not seen and abs(predicted - observed) * totalYards / max(seenYards, 1) >= PATH_MIN_SECONDS and not pathLines[path] and not pathNotes[path] then
+								pathNotes[path] = format("    path %d (%s) looks %.0f sec %s than the speeds of the taxi map give, but only %.0f%% of it was seen in flight %d. Fly it again to see all of it", path, a.data.pathName(path) or "?", abs(predicted - observed) * totalYards / max(seenYards, 1), predicted > observed and "shorter" or "longer", seenYards / totalYards * 100, a.index)
 							end
 							if seen then
-								local gain = predicted - observed
+								local gain = (predicted - observed) * (seenYards > 0 and totalYards / seenYards or 1)
 								local count = #a.data.pathPoints[path]
 								local whole = flown.first == 1 and flown.last == count
 								local name = a.data.pathName(path) or "?"
@@ -709,6 +718,15 @@ return function(ctx)
 								end
 								spread[count] = nil
 								local text = format("%.0f sec %s than the speeds of the taxi map give", abs(gain), gain > 0 and "shorter" or "longer")
+								-- a path that is flown at one speed all the way does not need every point of it to be seen, the points next to a taxi node we passed are skipped by the game
+								local distinct, numDistinct = {}, 0
+								for _, speed in pairs(spread) do
+									if not distinct[speed] then
+										distinct[speed] = true
+										numDistinct = numDistinct + 1
+									end
+								end
+								local uniform = not whole and numDistinct == 1 and (flown.last - flown.first + 1) >= count * PATH_MIN_SEEN
 								if abs(gain) < PATH_MIN_SECONDS then
 									if had and whole then
 										if not pathLines[path] then
@@ -719,11 +737,16 @@ return function(ctx)
 										small = small + 1
 									end
 								elseif not sameSpread(had, spread) then
-									if whole then
+									if whole or uniform then
 										local parts = {}
-										for _, point in ipairs(util.keys(flown.speeds)) do
-											if point ~= count then
-												parts[#parts + 1] = format("[%d] = %d", point, flown.speeds[point])
+										if uniform then
+											parts[1] = format("[1] = %d", next(distinct))
+											text = text .. format(", points %d to %d of %d were flown, all at one speed", flown.first, flown.last, count)
+										else
+											for _, point in ipairs(util.keys(flown.speeds)) do
+												if point ~= count then
+													parts[#parts + 1] = format("[%d] = %d", point, flown.speeds[point])
+												end
 											end
 										end
 										local unsure = {}

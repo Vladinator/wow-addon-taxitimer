@@ -71,6 +71,7 @@ ns.AREA_RAMPS = {
 ns.AREA_SPACING = {
 	[993] = { { 60, 15 }, { 100, 30 }, { 130, 40 } }, -- Broken Isles
 	[1922] = { { 80, 20 } }, -- Draenor
+	[2175] = { { 80, 15 }, { 100, 35 } }, -- Zaralek Cavern
 }
 
 -- Paths that change the flight speed as they pass their points, as `[pathId] = { [point index] = speed }`. The speed is flown from that point until a later point of the path changes it.
@@ -86,6 +87,7 @@ ns.PATH_SPEEDS = {
 	[8432] = { [1] = 10, [2] = 25, [3] = 40, [11] = 65, [13] = 100, [14] = 300, [16] = 250, [17] = 200, [18] = 100, [20] = 65, [22] = 40, [23] = 25 }, -- Tirna Vaal, Ardenweald > Oribos
 	[8557] = { [1] = 25, [2] = 35, [3] = 45, [4] = 70, [5] = 100, [8] = 300, [15] = 155, [16] = 60, [17] = 40, [18] = 25 }, -- Oribos > Tazavesh, the Veiled Market
 	[8558] = { [1] = 25, [2] = 50, [4] = 300, [11] = 100, [13] = 65, [14] = 50, [15] = 45, [16] = 25 }, -- Tazavesh, the Veiled Market > Oribos
+	[9382] = { [1] = 25 }, -- Old Loamm Road, Ohn'ahran Plains > Old Loamm Road, Zaralek Cavern
 	[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
 	[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps
 }
