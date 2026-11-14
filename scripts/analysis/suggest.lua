@@ -5,7 +5,7 @@
 ---@class SuggestFlight
 ---@field index number The number of the flight among the recorded ones.
 ---@field analysis FlightAnalysis
----@field geometry FlightGeometry
+---@field geometry TaxiTimerLib-1.0_FlightGeometry
 ---@field intervals FlownStretch[]
 ---@field seconds number How long the flight took, without the time spent loading.
 
@@ -39,9 +39,11 @@ return function(ctx)
 	local JOIN_MIN_SECONDS = 3 -- seconds a flight must get closer to its estimate before another way of flying past a taxi node is suggested
 	local RAMP_MIN_SECONDS = 0.25 -- seconds the flights must get closer to their estimates on average before other speeds for taking off and landing are suggested
 
-	-- Changing the tables of the simulation for a moment ----------------------------------------------------------------
+	--
+	-- MARK: Changing the tables of the simulation for a moment
+	--
 
-	-- sets `ns[name][key]` and returns what puts it back
+	-- sets `sim[name][key]` and returns what puts it back
 	---@param lib TaxiTimerLib-1.0_Sim
 	---@param name SuggestTable
 	---@param key number
@@ -65,7 +67,9 @@ return function(ctx)
 		end
 	end
 
-	-- Models -------------------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Models
+	--
 
 	-- how far off the estimates of the flights are with the tables the simulation has now, as the seconds on average and at worst
 	---@param lib TaxiTimerLib-1.0
@@ -115,7 +119,7 @@ return function(ctx)
 			speeds[i] = cruise
 		end
 		local function cost(candidate)
-			local restore = override(lib.sim, "AREA_SPACING", area, spacingFromSpeeds(candidate, cruise))
+			local restore = override(lib.Sim, "AREA_SPACING", area, spacingFromSpeeds(candidate, cruise))
 			local average, worst = modelError(lib, area, flights)
 			restore()
 			return average + 0.15 * worst
@@ -268,9 +272,11 @@ return function(ctx)
 		return format("%s on %d of %d flights%s", best == "" and "none" or best, #groups.byKey[best], total, #others > 0 and (" (" .. concat(others, "; ") .. ")") or "")
 	end
 
-	-- Flying past taxi nodes -----------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Flying past taxi nodes
+	--
 
-	-- `ns.NODE_JOINS` with the join of flying from `from` past `node` to `to` set to `join` (or without it), the tables that are changed are copies
+	-- `lib.Sim.NODE_JOINS` with the join of flying from `from` past `node` to `to` set to `join` (or without it), the tables that are changed are copies
 	---@param joins? table<number, table<number, table<number, number[]>>>
 	---@param node number
 	---@param from number
@@ -365,7 +371,7 @@ return function(ctx)
 			local join = joins[key]
 			local node, from, to = join.node, join.from, join.to
 			local count = #join.flights
-			local has = lib.sim.NODE_JOINS and lib.sim.NODE_JOINS[node] and lib.sim.NODE_JOINS[node][from] and lib.sim.NODE_JOINS[node][from][to]
+			local has = lib.Sim.NODE_JOINS and lib.Sim.NODE_JOINS[node] and lib.Sim.NODE_JOINS[node][from] and lib.Sim.NODE_JOINS[node][from][to]
 			local name = format("%s, flying from %s to %s", join.flights[1].data.nodeName(node), join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to))
 			local plural = count == 1 and "" or "s"
 
@@ -381,8 +387,8 @@ return function(ctx)
 			local with ---@type number?
 			if flown and not (has and format("%d, %d", has[1], has[2]) == flown) then
 				local last, first = flown:match("^(%d+), (%d+)$")
-				local flownJoin = withJoin(lib.sim.NODE_JOINS, node, from, to, { tonumber(last), tonumber(first) })
-				local restore = override(lib.sim, "NODE_JOINS", node, flownJoin)
+				local flownJoin = withJoin(lib.Sim.NODE_JOINS, node, from, to, { tonumber(last), tonumber(first) })
+				local restore = override(lib.Sim, "NODE_JOINS", node, flownJoin)
 				local withYards
 				with, withYards = offBy(join.flights)
 				restore()
@@ -390,29 +396,29 @@ return function(ctx)
 				local closer = now - with >= JOIN_MIN_SECONDS * count and nowYards - withYards >= JOIN_MIN_YARDS * count
 				-- a taxi node that is flown into and back out whole only needs to be left out of the rule that skips where the paths run alongside each other
 				local excepts = false
-				if join.whole == count and closer and not (lib.sim.RETRACE_EXCEPTIONS and lib.sim.RETRACE_EXCEPTIONS[node]) then
-					local restoreException = override(lib.sim, "RETRACE_EXCEPTIONS", node, true)
+				if join.whole == count and closer and not (lib.Sim.RETRACE_EXCEPTIONS and lib.Sim.RETRACE_EXCEPTIONS[node]) then
+					local restoreException = override(lib.Sim, "RETRACE_EXCEPTIONS", node, true)
 					excepts = offBy(join.flights) - with < count
 					restoreException()
 				end
 				if excepts then
-					kept[#kept + 1] = override(lib.sim, "RETRACE_EXCEPTIONS", node, true)
+					kept[#kept + 1] = override(lib.Sim, "RETRACE_EXCEPTIONS", node, true)
 					if not excepted[node] then
 						excepted[node] = true
 						lines[#lines + 1] = format("    add to RETRACE_EXCEPTIONS:    [%d] = true, -- %s (flown into and back out whole)", node, join.flights[1].data.nodeName(node))
 					end
 					lines[#lines + 1] = format("      %d flight%s from %s to %s, %.0f sec closer each with it", count, plural, join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to), (now - with) / count)
 				elseif closer then
-					kept[#kept + 1] = override(lib.sim, "NODE_JOINS", node, flownJoin)
+					kept[#kept + 1] = override(lib.Sim, "NODE_JOINS", node, flownJoin)
 					lines[#lines + 1] = format("    %s NODE_JOINS:    [%d] = { [%d] = { [%d] = { %s } } }, -- %s (%d flight%s, %.0f sec closer each with it)", has and "change in" or "add to", node, from, to, flown, name, count, plural, (now - with) / count)
 				end
 			elseif has then
 				-- the simulation may fly it right without the entry by now
-				local restore = override(lib.sim, "NODE_JOINS", node, withJoin(lib.sim.NODE_JOINS, node, from, to, nil))
+				local restore = override(lib.Sim, "NODE_JOINS", node, withJoin(lib.Sim.NODE_JOINS, node, from, to, nil))
 				local without = offBy(join.flights)
 				restore()
 				if without - now < JOIN_MIN_SECONDS * count then
-					kept[#kept + 1] = override(lib.sim, "NODE_JOINS", node, withJoin(lib.sim.NODE_JOINS, node, from, to, nil))
+					kept[#kept + 1] = override(lib.Sim, "NODE_JOINS", node, withJoin(lib.Sim.NODE_JOINS, node, from, to, nil))
 					lines[#lines + 1] = format("    remove from NODE_JOINS:    [%d] = { [%d] = { [%d] = ... } } -- %s (the %d flight%s past it are as close without it)", node, from, to, name, count, plural)
 				end
 			end
@@ -435,13 +441,13 @@ return function(ctx)
 	---@param lib TaxiTimerLib-1.0
 	---@param analyses FlightAnalysis[]
 	local function printRetraceCandidates(lib, analyses)
-		if not lib.sim.SKIP_RETRACED then
+		if not lib.Sim.SKIP_RETRACED then
 			return
 		end
 		---@type { analysis: FlightAnalysis, node: number, saved: number, share: number, seconds: number, cut: boolean }[]
 		local cases = {}
-		local keepExceptions, keepJoins = lib.sim.RETRACE_EXCEPTIONS, lib.sim.NODE_JOINS
-		lib.sim.RETRACE_EXCEPTIONS, lib.sim.NODE_JOINS = {}, {}
+		local keepExceptions, keepJoins = lib.Sim.RETRACE_EXCEPTIONS, lib.Sim.NODE_JOINS
+		lib.Sim.RETRACE_EXCEPTIONS, lib.Sim.NODE_JOINS = {}, {}
 		for _, a in ipairs(analyses) do
 			local route = a.record.route or {}
 			if not a.incomplete and not a.hasOverride and #route == 3 and #a.track >= 2 then
@@ -449,11 +455,11 @@ return function(ctx)
 				for i, id in ipairs(route) do
 					nodes[i] = { nodeID = id }
 				end
-				lib.sim.SKIP_RETRACED = true
+				lib.Sim.SKIP_RETRACED = true
 				local cutDistance = lib.GetFlightGeometry(nodes).distance
-				lib.sim.SKIP_RETRACED = false
+				lib.Sim.SKIP_RETRACED = false
 				local wholeDistance = lib.GetFlightGeometry(nodes).distance
-				lib.sim.SKIP_RETRACED = true
+				lib.Sim.SKIP_RETRACED = true
 				if wholeDistance - cutDistance > 1 then
 					local saved = wholeDistance - cutDistance
 					cases[#cases + 1] = {
@@ -467,7 +473,7 @@ return function(ctx)
 				end
 			end
 		end
-		lib.sim.RETRACE_EXCEPTIONS, lib.sim.NODE_JOINS = keepExceptions, keepJoins
+		lib.Sim.RETRACE_EXCEPTIONS, lib.Sim.NODE_JOINS = keepExceptions, keepJoins
 		if #cases == 0 then
 			return
 		end
@@ -520,9 +526,11 @@ return function(ctx)
 		end
 	end
 
-	-- Suggestions ------------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Suggestions
+	--
 
-	--- Prints what to change in the sim file for the flights of a game to be estimated better.
+	-- Prints what to change in the sim file for the flights of a game to be estimated better.
 	---@param analyses FlightAnalysis[] The analyses of the flights, in the order they were recorded.
 	---@param simFile string The sim file, for what to say.
 	---@param listJoins boolean If every taxi node that was flown past is listed with how it was flown.
@@ -560,11 +568,11 @@ return function(ctx)
 		local pathLines, pathNotes, pathOrder, small = {}, {}, {}, 0
 		local pathNew = {} ---@type table<number, table<number, number>|false> What each suggested line sets for the path (`false` to remove it), to see what it does to all of the flights on the path.
 		local sim = {
-			speeds = lib.sim.AREA_SPEEDS or {},
-			ramps = lib.sim.AREA_RAMPS or {},
-			spacing = lib.sim.AREA_SPACING or {},
-			nodes = lib.sim.NODE_SPEEDS or {},
-			paths = lib.sim.PATH_SPEEDS or {},
+			speeds = lib.Sim.AREA_SPEEDS or {},
+			ramps = lib.Sim.AREA_RAMPS or {},
+			spacing = lib.Sim.AREA_SPACING or {},
+			nodes = lib.Sim.NODE_SPEEDS or {},
+			paths = lib.Sim.PATH_SPEEDS or {},
 		}
 
 		for _, map in ipairs(mapOrder) do
@@ -584,10 +592,10 @@ return function(ctx)
 				out[#out + 1] = format("  speed: flown at %d, the sim file uses %d (%s)", cruise, now, sim.speeds[map] and "its entry in AREA_SPEEDS is wrong" or "it has no entry in AREA_SPEEDS")
 				if cruise == default then
 					out[#out + 1] = format("    remove from AREA_SPEEDS:    [%d] = ...", map)
-					restores[#restores + 1] = override(lib.sim, "AREA_SPEEDS", map, nil)
+					restores[#restores + 1] = override(lib.Sim, "AREA_SPEEDS", map, nil)
 				else
 					out[#out + 1] = format("    %s AREA_SPEEDS:    [%d] = %d,", sim.speeds[map] and "change in" or "add to", map, cruise)
-					restores[#restores + 1] = override(lib.sim, "AREA_SPEEDS", map, cruise)
+					restores[#restores + 1] = override(lib.Sim, "AREA_SPEEDS", map, cruise)
 				end
 			end
 
@@ -650,7 +658,7 @@ return function(ctx)
 					local candidate = { takeoff = parseSpeeds(takeoff), landing = parseSpeeds(landing) }
 					if sim.ramps[map] then
 						local currentError = modelError(lib, map, flights)
-						local restore = override(lib.sim, "AREA_RAMPS", map, candidate)
+						local restore = override(lib.Sim, "AREA_RAMPS", map, candidate)
 						local candidateError = modelError(lib, map, flights)
 						restore()
 						better = candidateError < currentError - RAMP_MIN_SECONDS
@@ -673,7 +681,7 @@ return function(ctx)
 						if takeoff == "" and landing == "" then
 							candidate = nil
 						end
-						restores[#restores + 1] = override(lib.sim, "AREA_RAMPS", map, candidate)
+						restores[#restores + 1] = override(lib.Sim, "AREA_RAMPS", map, candidate)
 					end
 				end
 			end
@@ -682,7 +690,7 @@ return function(ctx)
 			local average, worst = modelError(lib, map, flights)
 			if #flights >= SPACING_MIN_FLIGHTS then
 				local fitted = fitSpacing(lib, map, flights, max(cruise, 10))
-				local restore = override(lib.sim, "AREA_SPACING", map, fitted)
+				local restore = override(lib.Sim, "AREA_SPACING", map, fitted)
 				local fittedAverage, fittedWorst = modelError(lib, map, flights)
 				restore()
 				if not sameSpacing(fitted, sim.spacing[map] or {}) and fittedAverage <= average - SPACING_MIN_SECONDS then
@@ -692,7 +700,7 @@ return function(ctx)
 					else
 						out[#out + 1] = format("    remove from AREA_SPACING:    [%d] = ...", map)
 					end
-					restores[#restores + 1] = override(lib.sim, "AREA_SPACING", map, #fitted > 0 and fitted or nil)
+					restores[#restores + 1] = override(lib.Sim, "AREA_SPACING", map, #fitted > 0 and fitted or nil)
 					average, worst = fittedAverage, fittedWorst
 				end
 			end
@@ -740,7 +748,7 @@ return function(ctx)
 						return total
 					end
 					local before = offBy()
-					local restore = override(lib.sim, "NODE_SPEEDS", node, wanted)
+					local restore = override(lib.Sim, "NODE_SPEEDS", node, wanted)
 					local after = offBy()
 					restore()
 					if before - after >= PATH_MIN_SECONDS then
@@ -756,15 +764,15 @@ return function(ctx)
 						end
 						-- a speed seen on one flight is not written, so the paths of that flight are looked at without it (otherwise it would hide what its paths need)
 						if count >= 2 or not wanted then
-							restores[#restores + 1] = override(lib.sim, "NODE_SPEEDS", node, wanted)
+							restores[#restores + 1] = override(lib.Sim, "NODE_SPEEDS", node, wanted)
 						end
 					end
 				end
 			end
 
 			-- the paths that are off by more than a few seconds with the speeds of the taxi map need their own speeds
-			local savedPaths = lib.sim.PATH_SPEEDS
-			lib.sim.PATH_SPEEDS = {}
+			local savedPaths = lib.Sim.PATH_SPEEDS
+			lib.Sim.PATH_SPEEDS = {}
 			for _, flight in ipairs(flights) do
 				local a = flight.analysis
 				local without = lib.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
@@ -820,9 +828,9 @@ return function(ctx)
 								local name = a.data.pathName(path) or "?"
 								local runIndex = runOf[path] or 1
 								local run, before = runs[runIndex] or {}, runs[runIndex - 1]
-								local inherited = lib.sim.CARRY_SPEED and before ~= nil and before.exit ~= nil and run.entry == before.exit
+								local inherited = lib.Sim.CARRY_SPEED and before ~= nil and before.exit ~= nil and run.entry == before.exit
 								-- the points we did not see at the ends of the path were skipped by the game as the flight passed a taxi node, and are not the start or the end of the flight
-								local nearlyWhole = lib.sim.CARRY_SPEED and not (flown.first == 1 and flown.last == count)
+								local nearlyWhole = lib.Sim.CARRY_SPEED and not (flown.first == 1 and flown.last == count)
 									and (flown.first == 1 or (runIndex > 1 and flown.first <= 4))
 									and (flown.last >= count - 1 or (runIndex < #runs and flown.last >= count - 4))
 								local had = sim.paths[path] and spreadSpeeds(sim.paths[path], flown.first, flown.last, inherited and run.entry or nil) or nil
@@ -902,7 +910,7 @@ return function(ctx)
 					end
 				end
 			end
-			lib.sim.PATH_SPEEDS = savedPaths
+			lib.Sim.PATH_SPEEDS = savedPaths
 
 			-- a path is flown by more than the flight it was seen on, so what a line sets must make all of the flights on the path closer to how long they took, or the flights disagree
 			local function secondsOff()
@@ -917,7 +925,7 @@ return function(ctx)
 				local new = pathNew[path]
 				if new ~= nil and pathLines[path] then
 					local before = secondsOff()
-					local restore = override(lib.sim, "PATH_SPEEDS", path, new or nil)
+					local restore = override(lib.Sim, "PATH_SPEEDS", path, new or nil)
 					local after = secondsOff()
 					restore()
 					if before - after < PATH_MIN_NET_SECONDS then
@@ -990,7 +998,7 @@ return function(ctx)
 		return suggestions
 	end
 
-	--- Prints the suggested changes for each of the games the flights are from.
+	-- Prints the suggested changes for each of the games the flights are from.
 	---@param analyses FlightAnalysis[]
 	---@param simFile? string The sim file to compare to instead of the ones of the games.
 	---@param listJoins? boolean If every taxi node that was flown past is listed with how it was flown.
@@ -1008,7 +1016,7 @@ return function(ctx)
 			clients[client][#clients[client] + 1] = a
 		end
 		for _, client in ipairs(order) do
-			local file = simFile or (ctx.root .. "/sim_" .. client .. ".lua")
+			local file = simFile or (ctx.root .. "/libs/TaxiTimerLib/sim_" .. client .. ".lua")
 			suggested[#suggested + 1] = { simFile = file, data = clients[client][1].data, lines = suggestClient(clients[client], file, listJoins or false) }
 		end
 		return suggested

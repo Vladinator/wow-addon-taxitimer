@@ -24,7 +24,9 @@ return function(ctx)
 		return format("%d %s %s %.2f", record.time, tostring(record.flavor or record.project or ""), concat(route, ">"), tonumber(record.landed) or 0)
 	end
 
-	-- Writing ------------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Writing
+	--
 
 	---@param value number
 	---@return string
@@ -131,7 +133,9 @@ return function(ctx)
 		return true
 	end
 
-	-- Merging ------------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Merging
+	--
 
 	---@param path string
 	---@param records FlightRecord[] The flights of the saved variables.

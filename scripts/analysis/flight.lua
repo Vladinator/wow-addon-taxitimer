@@ -59,7 +59,7 @@
 ---@field uncertainty number Seconds the actual time can be off by.
 ---@field actual number Seconds the flight took.
 ---@field estimate number Seconds the flight was estimated to take.
----@field _geometry? FlightGeometry|false
+---@field _geometry? TaxiTimerLib-1.0_FlightGeometry|false
 ---@field _observed? { paths: table<number, PathObservation>, intervals: FlownStretch[] }
 
 ---@param ctx AnalysisContext
@@ -77,9 +77,11 @@ return function(ctx)
 	local Flight = {}
 	Flight.__index = Flight
 
-	-- Construction ---------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Construction
+	--
 
-	--- Creates the analysis of a recorded flight.
+	-- Creates the analysis of a recorded flight.
 	---@param index number The number of the flight among the recorded ones.
 	---@param record FlightRecord
 	---@param data TaxiData The taxi data of the game the flight was recorded on.
@@ -91,7 +93,7 @@ return function(ctx)
 			index = index,
 			record = record,
 			data = data,
-			ns = data.lib,
+			lib = data.lib,
 			near = near,
 			far = far,
 			warnings = {},
@@ -248,7 +250,9 @@ return function(ctx)
 		end
 	end
 
-	-- Times and speeds -----------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Times and speeds
+	--
 
 	-- seconds the flight took longer (positive) or shorter (negative) than estimated
 	---@return number
@@ -279,8 +283,8 @@ return function(ctx)
 		return split
 	end
 
-	--- What the simulation estimates for the flight with the sim file as it is now (the estimate of the record is what the addon gave when it was flown).
-	---@return FlightInfo?
+	-- What the simulation estimates for the flight with the sim file as it is now (the estimate of the record is what the addon gave when it was flown).
+	---@return TaxiTimerLib-1.0_FlightInfo?
 	function Flight:replay()
 		local geometry = self:geometry()
 		if not geometry or not self.record.area then
@@ -358,7 +362,7 @@ return function(ctx)
 		end
 	end
 
-	--- What makes the flight differ from what the simulation gives now, as lines to show: the distance, how the taxi nodes were flown past, the speed of the paths and the time spent loading.
+	-- What makes the flight differ from what the simulation gives now, as lines to show: the distance, how the taxi nodes were flown past, the speed of the paths and the time spent loading.
 	---@param seconds number The seconds a cause must add or take away to be shown.
 	---@return string[]
 	function Flight:whyOff(seconds)
@@ -476,7 +480,9 @@ return function(ctx)
 		return floor(speed / self.lib.TAXI_SPEED_SCALE / (self.record.speedModifier or 1) / 5 + 0.5) * 5
 	end
 
-	-- Where the flight was ---------------------------------------------------------------------------------------------------
+	--
+	-- MARK: Where the flight was
+	--
 
 	-- distance from a position to where we flew
 	---@param x number
@@ -521,10 +527,12 @@ return function(ctx)
 		return text
 	end
 
-	-- What the simulation of the addon says about the flight, going by the points it flies now ---------------------------------
+	--
+	-- MARK: What the simulation of the addon says about the flight, going by the points it flies now
+	--
 
-	--- The points the flight goes through and how far it is between them, from the simulation of the addon.
-	---@return FlightGeometry?
+	-- The points the flight goes through and how far it is between them, from the simulation of the addon.
+	---@return TaxiTimerLib-1.0_FlightGeometry?
 	function Flight:geometry()
 		if self._geometry == nil then
 			local nodes = {} ---@type TaxiTimerLib-1.0_TaxiRouteNode[]
@@ -546,7 +554,7 @@ return function(ctx)
 		if self._observed then
 			return self._observed.paths, self._observed.intervals
 		end
-		local ns = self.lib
+		local lib = self.lib
 		local paths, intervals = {}, {}
 		self._observed = { paths = paths, intervals = intervals }
 		local geometry = self:geometry()
@@ -560,7 +568,7 @@ return function(ctx)
 			for i = 1, #points - 1 do
 				intervals[numBefore + i] = { path = points[i].pathId, point = points[i].index, yards = lengths[i] or 0 }
 			end
-			local curve, starts = ns.CatmullPath(points)
+			local curve, starts = lib.CatmullPath(points)
 			if #curve >= 2 and #points >= 2 then
 				self:observeSegment(points, curve, starts, intervals, numBefore, paths)
 			end
@@ -691,7 +699,9 @@ return function(ctx)
 		end
 	end
 
-	-- The report -------------------------------------------------------------------------------------------------------------
+	--
+	-- MARK: The report
+	--
 
 	---@return string
 	function Flight:report()

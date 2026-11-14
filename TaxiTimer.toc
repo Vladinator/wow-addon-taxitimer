@@ -9,18 +9,6 @@
 ## X-WoWI-ID: 24026
 ## X-Wago-ID: WqKQPy6x
 ## X-AddonProvider: github
-
 libs\LibStub\LibStub.lua
-libs\TaxiTimerLib\TaxiTimerLib.lua
-
-libs\TaxiTimerLib\db_vanilla.lua [AllowLoadGameType vanilla]
-libs\TaxiTimerLib\db_classic.lua [AllowLoadGameType classic]
-libs\TaxiTimerLib\db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
-libs\TaxiTimerLib\db_mainline.lua [AllowLoadGameType standard]
-
-libs\TaxiTimerLib\sim_vanilla.lua [AllowLoadGameType vanilla]
-libs\TaxiTimerLib\sim_classic.lua [AllowLoadGameType classic]
-libs\TaxiTimerLib\sim_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
-libs\TaxiTimerLib\sim_mainline.lua [AllowLoadGameType standard]
-
+libs\TaxiTimerLib\TaxiTimerLib.xml
 core.lua

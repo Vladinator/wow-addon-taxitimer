@@ -1,4 +1,5 @@
-local lib = LibStub("TaxiTimerLib-1.0", true)
+local MAJOR, MINOR = "TaxiTimerLib-1.0", 1
+local lib = LibStub(MAJOR, true)
 if not lib then return end
 
 local sim = {} ---@class TaxiTimerLib-1.0_Sim
@@ -48,6 +49,7 @@ sim.AREA_FIXED_TIME = {
 -- Taxi maps where flights speed up after taking off and slow down before landing.
 -- The takeoff speeds are flown from the first points of the flight, one per point. The landing speeds are flown from the last points before the destination, one per point, the last being the point before the destination.
 -- Paths in `PATH_SPEEDS` have their own speeds and do not use these.
+---@type table<number, TaxiTimerLib-1.0_TaxiAreaRamp>
 sim.AREA_RAMPS = {
 }
 
@@ -63,4 +65,4 @@ sim.PATH_SPEEDS = {
 }
 
 ---@diagnostic disable-next-line: deprecated
-lib.SetSimulation(sim)
+lib.SetSimulation(sim, MINOR)

@@ -29,7 +29,7 @@
 
 ---The taxi data of a game, and the simulation of the addon for it.
 ---@class TaxiData
----@field client TaxiTimerLib-1.0_TaxiFlavor
+---@field client TaxiTimerLib-1.0_GameFlavor
 ---@field lib TaxiTimerLib-1.0 The lib for taxi data and simulation.
 ---@field nodes table<number, TaxiDataNode> By taxi node id.
 ---@field paths table<number, table<number, number>> `paths[from][to]` is the id of the first path between two taxi nodes, like the addon has it.
@@ -40,7 +40,7 @@
 ---@field pathName fun(path: number): string?
 
 ---Loads the taxi data of a game, the first time it is asked for.
----@alias TaxiDataLoader fun(client: TaxiTimerLib-1.0_TaxiFlavor, simFile?: string): TaxiData?, string?
+---@alias TaxiDataLoader fun(client: TaxiTimerLib-1.0_GameFlavor, simFile?: string): TaxiData?, string?
 
 ---@param ctx AnalysisContext
 ---@return TaxiDataLoader
@@ -93,7 +93,7 @@ return function(ctx)
 	end
 
 	---The names and positions of the taxi nodes, the db the addon has does not have them.
-	---@param client TaxiTimerLib-1.0_TaxiFlavor
+	---@param client TaxiTimerLib-1.0_GameFlavor
 	---@return table<number, TaxiDataNode>
 	local function readNodes(client)
 		local nodes = {} ---@type table<number, TaxiDataNode>
@@ -139,16 +139,16 @@ return function(ctx)
 			return cache[client]
 		end
 
-		-- the files of the addon that the game loads, so the simulation is the one of the addon
-		local ns, err = shim.addon(ctx.root, client, { exclude = { "core.lua" }, sim = simFile })
-		if not ns then
+		-- the library of the addon with the db and sim of the game, so the simulation is the one of the addon
+		local lib, err = shim.library(ctx.root, client, { sim = simFile })
+		if not lib then
 			return nil, string.format("unable to load the %s files of the addon: %s", client, tostring(err))
 		end
 
 		local data ---@type TaxiData
 		data = {
 			client = client,
-			lib = ns,
+			lib = lib,
 			nodes = readNodes(client),
 			paths = {},
 			points = {},
@@ -171,8 +171,8 @@ return function(ctx)
 			end,
 		}
 
-		local PATH = ns.TAXIPATH
-		for _, chunk in ipairs(ns.taxipath or {}) do
+		local PATH = lib.DB.TAXIPATH
+		for _, chunk in ipairs(lib.DB.taxipath or {}) do
 			for _, row in ipairs(chunk) do
 				local from, to = row[PATH.FROMTAXINODE], row[PATH.TOTAXINODE]
 				local destinations = data.paths[from]
@@ -186,8 +186,8 @@ return function(ctx)
 			end
 		end
 
-		local NODE = ns.TAXIPATHNODE
-		for _, chunk in ipairs(ns.taxipathnode or {}) do
+		local NODE = lib.DB.TAXIPATHNODE
+		for _, chunk in ipairs(lib.DB.taxipathnode or {}) do
 			for _, row in ipairs(chunk) do
 				local path = row[NODE.PATHID]
 				local list = data.pathPoints[path]

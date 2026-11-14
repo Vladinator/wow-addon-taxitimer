@@ -37,13 +37,6 @@ function loadstring(chunk, chunkname) end
 ---@return function
 function setfenv(f, env) end
 
----Returns the values of a list, only in Lua 5.1 (and LuaJIT), later versions have `table.unpack`.
----@param list table
----@param i? integer
----@param j? integer
----@return any ...
-function unpack(list, i, j) end
-
 ---@class iolib
 io = {}
 
@@ -77,13 +70,6 @@ function os.exit(code, close) end
 ---@param time? integer
 ---@return string|table
 function os.date(format, time) end
-
----@param date? table
----@return integer
-function os.time(date) end
-
----@return number
-function os.clock() end
 
 ---@param filename string
 ---@return boolean? ok

@@ -74,22 +74,22 @@ return function(ctx)
 		return changes, held
 	end
 
-	-- the lines of the table `ns.NAME = { ... }` in the sim file, as the index of its first and its last line
+	-- the lines of the table `sim.NAME = { ... }` in the sim file, as the index of its first and its last line
 	---@param lines string[]
 	---@param name string
 	---@return number? first
 	---@return number? last
 	local function findTable(lines, name)
 		for i, line in ipairs(lines) do
-			if line:match("^ns%." .. name .. " = {%s*$") then
+			if line:match("^sim%." .. name .. " = {%s*$") then
 				for j = i + 1, #lines do
 					if lines[j]:match("^}") then
 						return i, j
 					end
 				end
-			elseif line:match("^ns%." .. name .. " = {}%s*$") then
+			elseif line:match("^sim%." .. name .. " = {}%s*$") then
 				-- an empty table on one line is opened up
-				lines[i] = "ns." .. name .. " = {"
+				lines[i] = "sim." .. name .. " = {"
 				table.insert(lines, i + 1, "}")
 				return i, i + 1
 			end
@@ -148,7 +148,7 @@ return function(ctx)
 			return 0
 		end
 		local joins = {} ---@type table<number, table<number, table<number, number[]>>>
-		for node, fromNodes in pairs(data.lib.sim.NODE_JOINS or {}) do
+		for node, fromNodes in pairs(data.lib.Sim.NODE_JOINS or {}) do
 			joins[node] = {}
 			for from, toNodes in pairs(fromNodes) do
 				joins[node][from] = {}
@@ -195,7 +195,7 @@ return function(ctx)
 		return applied
 	end
 
-	--- Writes the suggestions into the sim file.
+	-- Writes the suggestions into the sim file.
 	---@param simFile string
 	---@param suggestions string[] The suggestions as they were shown.
 	---@param data TaxiData The taxi data of the game the sim file is for.

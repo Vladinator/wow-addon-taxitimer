@@ -2,7 +2,7 @@
 
 Compares the flights recorded by the addon against the taxi data, to show where the estimates are off and why, and what to change in the sim file of the game to make them better.
 
-The estimates are made by the simulation of the addon itself (`catmul.lua` and `taxi.lua` with the db and sim files of the game), so what is compared to is what the addon does.
+The estimates are made by the simulation of the addon itself (the library `libs/TaxiTimerLib` with the db and sim files of the game), so what is compared to is what the addon does.
 
 To record flights set `RECORD_FLIGHTS = true` at the top of `core.lua`, fly, then log out or reload so the saved variables are written.
 
@@ -63,12 +63,14 @@ local util = ctx.util
 local printf, warn = util.printf, util.warn
 local format = string.format
 
--- the options --------------------------------------------------------------------------------------------------------------
+--
+-- MARK: The options
+--
 
 local file ---@type string? The saved variables file.
 local wanted = {} ---@type table<number, boolean> The flights to show the details of.
 local all, speeds, suggest, joins = false, false, true, false
-local client ---@type TaxiTimerLib-1.0_TaxiFlavor? The game to use instead of the one the flights were recorded on.
+local client ---@type TaxiTimerLib-1.0_GameFlavor? The game to use instead of the one the flights were recorded on.
 local simFile ---@type string?
 local coverage = false
 local keepSuperseded = false
@@ -110,7 +112,7 @@ for _, option in ipairs(arg or {}) do
 	elseif option:match("^--sim=.+$") then
 		simFile = option:match("^--sim=(.+)$")
 	elseif option:match("^--client=%w+$") then
-		client = option:match("=(%w+)") --[[@as TaxiTimerLib-1.0_TaxiFlavor]]
+		client = option:match("=(%w+)") --[[@as TaxiTimerLib-1.0_GameFlavor]]
 	elseif option:match("^--near=[%d.]+$") then
 		near = tonumber(option:match("=([%d.]+)")) or near
 	elseif option:match("^--far=[%d.]+$") then
@@ -130,7 +132,9 @@ if not file and not (archivePath and shim.readfile(archivePath)) then
 	usage() -- without saved variables the flights that were kept are analyzed, if there are any
 end
 
--- the flights ------------------------------------------------------------------------------------------------------------------
+--
+-- MARK: The flights
+--
 
 local records = {} ---@type FlightRecord[]
 if file then
@@ -162,7 +166,7 @@ end
 
 -- the game to compare a flight to, newer records say which game they are from, named like its db file
 ---@param record FlightRecord
----@return TaxiTimerLib-1.0_TaxiFlavor
+---@return TaxiTimerLib-1.0_GameFlavor
 local function getClient(record)
 	if type(record.flavor) == "string" then
 		return record.flavor
@@ -515,7 +519,9 @@ if speeds then
 	shown = shown + 1
 end
 
--- where there are flights and where there are none -----------------------------------------------------------------------
+--
+-- MARK: Where there are flights and where there are none
+--
 
 if coverage then
 	---@class AnalysisCoverage

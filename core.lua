@@ -5,29 +5,7 @@ local addonName = ... ---@type string
 
 local lib = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
 
---- Returns what the flight path mount speed modifier (currently only relevant for Forever "Frequent Flier" legacy talent)
----@return number
-local function GetSpeedModifier()
-	local modifiers = lib.sim.SPEED_MODIFIERS
-	local modifier = 1
-
-	if modifiers then
-		---@diagnostic expect-next-line: deprecated
-		local IsSpellKnown = IsSpellKnown or C_SpellBook.IsSpellKnown ---@type fun(spell: number, ...: any): boolean
-
-		for i = 1, #modifiers do
-			local entry = modifiers[i]
-
-			if IsSpellKnown(entry.spellId) then
-				modifier = modifier * entry.multiplier
-			end
-		end
-	end
-
-	return modifier
-end
-
---- Returns the speed we fly at, but never less than the taxi map is flown at as it is lower while taking off and landing.
+-- Returns the speed we fly at, but never less than the taxi map is flown at as it is lower while taking off and landing.
 ---@param areaID? number
 ---@param speedModifier? number
 ---@return number
@@ -39,70 +17,6 @@ local function GetLiveSpeed(areaID, speedModifier)
 	end
 
 	return max(GetUnitSpeed("player"), speed)
-end
-
---- Asks the game for the route to the destination and returns what the flight is estimated to be like.
----@param taxiNodes TaxiNodeInfo[]
----@param from? TaxiNodeInfo
----@param to? TaxiNodeInfo
----@param areaID? number
----@param otherNodes? TaxiNodeInfo[] The taxi nodes of the other taxi map that is shown, for the slots the taxi map we are on does not have.
----@return FlightInfo?
-local function GetFlightInfo(taxiNodes, from, to, areaID, otherNodes)
-	if not from or not to or from == to then
-		return
-	end
-	local nodes = {} ---@type table<TaxiNodeInfo|number, boolean|TaxiNodeInfo>
-	local slotIndex = to.slotIndex
-	---@type number
-	local numRoutes = GetNumRoutes(slotIndex) ---@diagnostic expect-line: assign-type-mismatch
-	if type(numRoutes) ~= "number" then
-		return -- the taxi map is not open
-	end
-	local numMissing = 0
-	for routeIndex = 1, numRoutes do
-		---@type number
-		local sourceSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, true) ---@diagnostic expect-line: assign-type-mismatch, redundant-parameter
-		---@type number
-		local destinationSlotIndex = TaxiGetNodeSlot(slotIndex, routeIndex, false) ---@diagnostic expect-line: assign-type-mismatch, redundant-parameter
-		local sourceNode = taxiNodes[sourceSlotIndex] or (otherNodes and otherNodes[sourceSlotIndex])
-		local destinationNode = taxiNodes[destinationSlotIndex] or (otherNodes and otherNodes[destinationSlotIndex])
-		-- taxi nodes that are never shown on the taxi map (like the tunnels into Zaralek Cavern) are not in the list, so only the ones we have are used and the simulation finds the way between them
-		if sourceNode and not nodes[sourceNode] then
-			nodes[sourceNode] = true
-			table.insert(nodes, sourceNode)
-		end
-		if destinationNode and not nodes[destinationNode] then
-			nodes[destinationNode] = true
-			table.insert(nodes, destinationNode)
-		end
-		numMissing = numMissing + (sourceNode and 0 or 1) + (destinationNode and 0 or 1)
-	end
-	-- the start and the destination are known even if the taxi map has no slot for them (the destination can be on another taxi map than the one we are on)
-	local function HasNode(node)
-		for i = 1, #nodes do
-			if nodes[i].nodeID == node.nodeID then
-				return true
-			end
-		end
-		return false
-	end
-	if not HasNode(from) then
-		table.insert(nodes, 1, from)
-	end
-	if not HasNode(to) then
-		nodes[#nodes + 1] = to
-	end
-	return lib.GetFlightInfoFromNodes(nodes, areaID, GetSpeedModifier())
-end
-
----@param timeAmount number
----@param asMs? boolean
----@param dropZeroHours? boolean
-local function GetTimeStringFromSeconds(timeAmount, asMs, dropZeroHours)
-	local seconds = asMs and floor(timeAmount / 1000) or timeAmount
-	local displayZeroHours = not (dropZeroHours and seconds < 3600)
-	return SecondsToClock(seconds, displayZeroHours)
 end
 
 ---@class Timer
@@ -155,7 +69,7 @@ local Recorder do
 	---@field public version number Format of the record.
 	---@field public addon string Version of the addon.
 	---@field public project number Game client (`WOW_PROJECT_ID`).
-	---@field public flavor? TaxiTimerLib-1.0_TaxiFlavor The game the flight was recorded on, named like its db file.
+	---@field public flavor? TaxiTimerLib-1.0_GameFlavor The game the flight was recorded on, named like its db file.
 	---@field public build number Game build number.
 	---@field public time number Server time when the flight was taken.
 	---@field public area? number The taxi map.
@@ -185,7 +99,7 @@ local Recorder do
 	local RECORD_LOST_DISTANCE = 500 -- yards away from the points near us before we look at all the points ahead
 
 	---@class RecorderFlight
-	---@field public info FlightInfo
+	---@field public info TaxiTimerLib-1.0_FlightInfo
 	---@field public record FlightRecord
 	---@field public pointIndex? number
 
@@ -264,7 +178,7 @@ local Recorder do
 	end
 
 	---@param state State
-	---@param info FlightInfo
+	---@param info TaxiTimerLib-1.0_FlightInfo
 	function Recorder:Start(state, info)
 		current = nil
 		if not RECORD_FLIGHTS then
@@ -299,7 +213,7 @@ local Recorder do
 				version = RECORD_VERSION,
 				addon = C_AddOns.GetAddOnMetadata(addonName, "Version") or "",
 				project = WOW_PROJECT_ID,
-				flavor = lib.sim.FLAVOR,
+				flavor = lib.Sim.FLAVOR,
 				build = tonumber((select(2, GetBuildInfo()))) or 0,
 				time = GetServerTime(),
 				area = state.areaID,
@@ -360,8 +274,11 @@ local Recorder do
 	end
 
 	-- asking to land early ends the flight at the next taxi node
-	if RECORD_FLIGHTS and TaxiRequestEarlyLanding then
+	if TaxiRequestEarlyLanding then
 		hooksecurefunc("TaxiRequestEarlyLanding", function()
+			if not RECORD_FLIGHTS then
+				return
+			end
 			local flight = current
 			if flight and flight.record.firstTaxi and not flight.record.early then
 				flight.record.early = Round(GetTime() - flight.record.clicked, 2)
@@ -432,7 +349,7 @@ local GPS do
 	GPS = {}
 
 	-- Checks if we left the taxi because the flight is changing to the map of its destination, and not because the flight ended.
-	---@param info FlightInfo
+	---@param info TaxiTimerLib-1.0_FlightInfo
 	---@return boolean
 	local function IsChangingMap(info)
 		local gps = GPSInfo
@@ -464,7 +381,7 @@ local GPS do
 	end
 
 	---@param state State
-	---@param info FlightInfo
+	---@param info TaxiTimerLib-1.0_FlightInfo
 	function GPS:Start(state, info)
 		-- any previous flight is stopped before the stopwatch is started for this flight
 		if Ticker then
@@ -582,23 +499,18 @@ local GPS do
 
 end
 
----@class State
+---@class State : TaxiTimerLib-1.0_TaxiMap
 local State do
 
 	---@class State
-	---@field public areaID? number
-	---@field public from? TaxiNodeInfo
-	---@field public to? TaxiNodeInfo
-	---@field public nodes TaxiNodeInfo[] The taxi nodes by slot of the current taxi map.
-	---@field public otherNodes table<number, TaxiNodeInfo> The taxi nodes by slot of the other taxi map that is shown, for the slots `nodes` does not have.
-	---@field public otherMaps table<number, boolean> The taxi maps `otherNodes` was filled from.
-	---@field public otherConflict? boolean If the slots of another taxi map are not the same as the ones of the taxi map we are on, so they can not be used.
+	---@field public to? TaxiNodeInfo The taxi node the player points at or clicks on.
 	---@field public gps? FunctionContainer
 
 	---@class TaxiButton : Button
 	---@field public taxiNodeData TaxiNodeInfo
 
-	State = { nodes = {}, otherNodes = {}, otherMaps = {} }
+	-- we utilize the library to keep track of the taxi map state (we just have to hook it up and call the API that updates the state)
+	State = setmetatable({}, { __index = function(_, key) return lib.GameAPI.TaxiMap[key] end }) ---@type State
 
 	---@param button TaxiButton
 	function State:UpdateButton(button)
@@ -643,7 +555,7 @@ local State do
 			GameTooltip:AddLine(format("Recording: %s", RECORD_FLIGHTS and "Yes" or "No"), 0.8, 0.8, 0.8, false)
 			GameTooltip:AddLine(" ")
 		end
-		GameTooltip:AddLine(format("~ %s flight time", GetTimeStringFromSeconds(info.duration, false, true)), 1, 1, 1, false)
+		GameTooltip:AddLine(format("~ %s flight time", lib.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
 		GameTooltip:Show()
 	end
 
@@ -655,61 +567,15 @@ local State do
 		GPS:Start(self, info)
 	end
 
-	function State:AddShownMap()
-		local frame = _G["FlightMapFrame"] ---@type { GetMapID?: fun(self: table): number? }?
-		local mapID = frame and frame.GetMapID and frame:GetMapID()
-		if type(mapID) ~= "number" or mapID == self.areaID or self.otherMaps[mapID] then
-			return
-		end
-		self.otherMaps[mapID] = true
-		local nodes = C_TaxiMap.GetAllTaxiNodes(mapID)
-		for i = 1, #nodes do
-			local node = nodes[i]
-			local known = self.nodes[node.slotIndex]
-			if known and known.nodeID ~= node.nodeID then
-				-- the slots mean something else on the other taxi map, so none of them can be used
-				table.wipe(self.otherNodes)
-				self.otherConflict = true
-				return
-			end
-			if not known and not self.otherConflict then
-				self.otherNodes[node.slotIndex] = node
-			end
-		end
-	end
-
-	---@return FlightInfo?
+	---@return TaxiTimerLib-1.0_FlightInfo?
 	function State:GetFlightInfo()
-		self:AddShownMap()
-		return GetFlightInfo(self.nodes, self.from, self.to, self.areaID, self.otherNodes)
-	end
-
-	function State:IsValidState()
-		return not not (self.areaID and self.areaID > 0 and self.from and next(self.nodes))
+		return lib.GameAPI.GetFlightInfoToNode(self.to)
 	end
 
 	---@param forceUpdate? boolean
 	function State:Update(forceUpdate)
-		local areaID = GetTaxiMapID()
-		if not forceUpdate and self:IsValidState() and areaID == self.areaID then
-			return
-		end
-		local from = not forceUpdate and self.from or nil
-		self.areaID, self.from, self.to = areaID, from, nil
-		table.wipe(self.nodes)
-		table.wipe(self.otherNodes)
-		table.wipe(self.otherMaps)
-		self.otherConflict = nil
-		if not self.areaID then
-			return
-		end
-		local nodes = C_TaxiMap.GetAllTaxiNodes(self.areaID)
-		for i = 1, #nodes do
-			local node = nodes[i]
-			if node.state == Enum.FlightPathState.Current then
-				self.from = node
-			end
-			self.nodes[node.slotIndex] = node
+		if lib.GameAPI.UpdateTaxiMap(forceUpdate) then
+			self.to = nil
 		end
 	end
 
@@ -799,64 +665,22 @@ local AddOn do
 	AddOn:SetScript("OnEvent", OnEvent)
 	AddOn:RegisterEvent("ADDON_LOADED")
 
+	_G[format("SLASH_%s1", addonName)] = "/taxitimer"
+	SlashCmdList[addonName] = function(text)
+		local newState = not (SHOW_EXTRA_DEBUG_INFO or RECORD_FLIGHTS)
+		SHOW_EXTRA_DEBUG_INFO = newState
+		RECORD_FLIGHTS = newState
+		print(format("|cffFFFF00%s debugging %s.|r", addonName, newState and "enabled (for this session)" or "disabled"))
+	end
+
 end
 
 -- TaxiTimerAPI
-do
-
-	---@class TaxiTimerAPI
-	_G.TaxiTimerAPI = {}
-
-	---@param slotIndex number
-	---@return TaxiNodeInfo?
-	function TaxiTimerAPI.GetNodeFromSlotIndex(slotIndex)
-		if type(slotIndex) ~= "number" then
-			return
-		end
-		return State.nodes[slotIndex]
-	end
-
-	---@param toSlotIndex number
-	---@param fromSlotIndex? number Only if you wish to check the travel time from another starting node.
-	---@param areaID? number Only if you know you wish to override calculations with another areaID than the current TaxiMap provided one.
-	---@param forceUpdateState? boolean Only if you know the state is stale, otherwise the addon refreshes it as the TaxiMap opens.
-	---@return FlightInfo?
-	function TaxiTimerAPI.GetFlightInfo(toSlotIndex, fromSlotIndex, areaID, forceUpdateState)
-		State:Update(forceUpdateState)
-		local from = fromSlotIndex and TaxiTimerAPI.GetNodeFromSlotIndex(fromSlotIndex) or State.from
-		if not from then
-			return
-		end
-		local to = TaxiTimerAPI.GetNodeFromSlotIndex(toSlotIndex)
-		if not to then
-			return
-		end
-		return GetFlightInfo(State.nodes, from, to, areaID or State.areaID)
-	end
-
-	---@param info? FlightInfo
-	---@param dropZeroHours? boolean
-	---@return string?
-	function TaxiTimerAPI.GetFlightTime(info, dropZeroHours)
-		if type(info) ~= "table" then
-			return
-		end
-		local duration = info.duration
-		local distance = info.distance
-		local speed = info.speed
-		if type(duration) ~= "number" then
-			if type(distance) ~= "number" or type(speed) ~= "number" or speed <= 0 then
-				return
-			end
-			duration = distance / speed
-		end
-		if duration ~= duration or duration < 0 or duration == math.huge then
-			return
-		end
-		if dropZeroHours == nil then
-			dropZeroHours = true
-		end
-		return GetTimeStringFromSeconds(duration, false, dropZeroHours)
-	end
-
-end
+-- This is a global legacy variable that you may continue to use.
+-- You may also use the `LibStub("TaxiTimerLib-1.0")` approach instead.
+---@class TaxiTimerAPI
+_G.TaxiTimerAPI = {
+	GetNodeFromSlotIndex = function(...) return lib.GameAPI.GetNodeFromSlotIndex(...) end,
+	GetFlightInfo = function(...) return lib.GameAPI.GetFlightInfo(...) end,
+	GetFlightTime = function(...) return lib.GameAPI.GetFlightTime(...) end,
+}

@@ -1,8 +1,17 @@
 local MAJOR, MINOR = "TaxiTimerLib-1.0", 1
 
 ---@class TaxiTimerLib-1.0
-local lib, minor = LibStub:NewLibrary(MAJOR, MINOR)
+local lib, oldMinor = LibStub:NewLibrary(MAJOR, MINOR)
 if not lib then return end
+
+-- Upgrade the library.
+if oldMinor then
+	lib.DB = nil
+	lib.Sim = nil
+	lib.GameAPI = nil
+end
+
+---@alias TaxiTimerLib-1.0_GameFlavor "mainline"|"forever"|"vanilla"|"classic"
 
 ---@class TaxiTimerLib-1.0_TaxiNodesStruct
 
@@ -21,20 +30,45 @@ if not lib then return end
 ---@field public FLAGS 7
 ---@field public DELAY 8
 
----@class TaxiTimerLib-1.0_TaxiRouteNode A taxi node of a route, the nodes the game gives us have more than this.
----@field public nodeID number
----@field public name? string
+-- A row of `lib.DB.taxipath` where the columns are indexed using `lib.DB.TAXIPATH`.
+---@alias TaxiTimerLib-1.0_TaxiPathRow { [1]: number, [2]: number, [3]: number }
 
----@class TaxiTimerLib-1.0_TaxiPath
----@field public id number
----@field public from number
----@field public to number
+-- The rows of `lib.DB.taxipath` split up into chunks.
+---@alias TaxiTimerLib-1.0_TaxiPathRowChunks table<number, TaxiTimerLib-1.0_TaxiPathRow[]>
+
+-- A row of `lib.DB.taxipathnode` where the columns are indexed using `lib.DB.TAXIPATHNODE`.
+---@alias TaxiTimerLib-1.0_TaxiPathNodeRow { [1]: number, [2]: number, [3]: number, [4]: number, [5]: number, [6]: number, [7]: number, [8]: number }
+
+-- The rows of `lib.DB.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
+---@alias TaxiTimerLib-1.0_TaxiPathNodeRowChunks table<number, TaxiTimerLib-1.0_TaxiPathNodeRow[]>
+
+---@class TaxiTimerLib-1.0_DB
+---@field public TAXINODES TaxiTimerLib-1.0_TaxiNodesStruct
+---@field public TAXIPATH TaxiTimerLib-1.0_TaxiPathStruct
+---@field public TAXIPATHNODE TaxiTimerLib-1.0_TaxiPathNodeStruct
+---@field public taxipath TaxiTimerLib-1.0_TaxiPathRowChunks
+---@field public taxipathnode TaxiTimerLib-1.0_TaxiPathNodeRowChunks
+
+--
+-- The simulation: what the `sim_` file of a game has, on top of what the database says. Its tables are described by the `sim_` files.
+--
+
+---@class TaxiTimerLib-1.0_Sim
+
+---@class TaxiTimerLib-1.0_TaxiAreaRamp
+---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
+---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
+
+--
+-- Points and routes
+--
 
 ---@class TaxiTimerLib-1.0_Point
 ---@field x number
 ---@field y number
 ---@field z number
 
+-- A point of a taxi path, made from a row of `lib.DB.taxipathnode`.
 ---@class TaxiTimerLib-1.0_TaxiPathNode : TaxiTimerLib-1.0_Point
 ---@field public pathId number The path id.
 ---@field public index number The node index in the path.
@@ -43,41 +77,51 @@ if not lib then return end
 ---@field public flags number
 ---@field public delay number The seconds the flight waits at the point if it is flagged as a stop.
 
----@class TaxiTimerLib-1.0_DB
----@field public TAXINODES TaxiTimerLib-1.0_TaxiNodesStruct
----@field public TAXIPATH TaxiTimerLib-1.0_TaxiPathStruct
----@field public TAXIPATHNODE TaxiTimerLib-1.0_TaxiPathNodeStruct
----@field public taxipath TaxiPathStructDB
----@field public taxipathnode TaxiPathNodeStructDB
-
----@class TaxiTimerLib-1.0_Sim
+-- A taxi node of a route, which is all the library needs to know of it (the taxi node ids of the route).
+-- It is often `TaxiNodeInfo` type if you inspect the table (since it also contains what we need), but we can't guarantee that, especially when running the lib outside of the game.
+---@alias TaxiTimerLib-1.0_TaxiRouteNode { nodeID: number, name?: string }
 
 --
--- MARK: Database
+-- MARK: Internals
 --
 
 -- The currently loaded database.
-lib.db = lib.db or nil ---@type TaxiTimerLib-1.0_DB
+lib.DB = lib.DB or nil ---@type TaxiTimerLib-1.0_DB
+
+-- The currently loaded simulation.
+lib.Sim = lib.Sim or nil ---@type TaxiTimerLib-1.0_Sim
+
+-- The currently loaded Game API.
+lib.GameAPI = lib.GameAPI or nil ---@type TaxiTimerLib-1.0_GameAPI
 
 ---@deprecated For internal use only. This loads and updates lib references to the currently loaded database.
 ---@param db TaxiTimerLib-1.0_DB
-function lib.SetDatabase(db)
+---@param incomingMinor number The `MINOR` of the files the database is from, the database is left out if it is not the version of this library.
+function lib.SetDatabase(db, incomingMinor)
 	assert(type(db) == "table" and type(db.TAXINODES) == "table" and type(db.TAXIPATH) == "table" and type(db.TAXIPATHNODE) == "table" and type(db.taxipath) == "table" and type(db.taxipathnode) == "table", 'TaxiTimerLib-1.0 "SetDatabase" expected a database table.')
-    lib.db = db
+	assert(type(incomingMinor) == "number", 'TaxiTimerLib-1.0 "SetDatabase" expected the "MINOR" of the files as the second argument.')
+	if incomingMinor ~= MINOR then return end
+	lib.DB = db
 end
-
---
--- MARK: Simulation
---
-
--- The currently loaded simulation.
-lib.sim = lib.sim or nil ---@type TaxiTimerLib-1.0_Sim
 
 ---@deprecated For internal use only. This loads and updates lib references to the currently loaded simulation.
 ---@param sim TaxiTimerLib-1.0_Sim
-function lib.SetSimulation(sim)
+---@param incomingMinor number The `MINOR` of the files the simulation is from, the simulation is left out if it is not the version of this library.
+function lib.SetSimulation(sim, incomingMinor)
 	assert(type(sim) == "table" and type(sim.FLAVOR) == "string", 'TaxiTimerLib-1.0 "SetSimulation" expected a simulation table.')
-    lib.sim = sim
+	assert(type(incomingMinor) == "number", 'TaxiTimerLib-1.0 "SetSimulation" expected the "MINOR" of the files as the second argument.')
+	if incomingMinor ~= MINOR then return end
+	lib.Sim = sim
+end
+
+---@deprecated For internal use only. This loads and updates lib references to the currently loaded Game API.
+---@param gameAPI TaxiTimerLib-1.0_GameAPI
+---@param incomingMinor number The `MINOR` of the files the Game API is from, the Game API is left out if it is not the version of this library.
+function lib.SetGameAPI(gameAPI, incomingMinor)
+	assert(type(gameAPI) == "table", 'TaxiTimerLib-1.0 "SetGameAPI" expected a table with the game functions.')
+	assert(type(incomingMinor) == "number", 'TaxiTimerLib-1.0 "SetGameAPI" expected the "MINOR" of the files as the second argument.')
+	if incomingMinor ~= MINOR then return end
+	lib.GameAPI = gameAPI
 end
 
 --
@@ -234,8 +278,8 @@ function lib.CatmullDistance(path, ignoreHeight)
 	return distance, intervals
 end
 
---- Returns the points of the curve through `path`, and where each point of the path is among them.
---- A point sharing the position of the point before it is where that point is.
+-- Returns the points of the curve through `path`, and where each point of the path is among them.
+-- A point sharing the position of the point before it is where that point is.
 ---@param path TaxiTimerLib-1.0_Point[]
 ---@param ignoreHeight? boolean `true` to leave out the height of the points
 ---@return TaxiTimerLib-1.0_Point[] curve, number[] starts `starts[i]` is the index in `curve` of `path[i]`. What is flown from `path[i]` to `path[i + 1]` are the points from `starts[i]` up to `starts[i + 1]`.
@@ -298,34 +342,7 @@ function lib.CatmullPath(path, ignoreHeight)
 end
 
 --
--- MARK: Taxi Flight
---
-
----@alias TaxiTimerLib-1.0_TaxiFlavor "mainline"|"forever"|"vanilla"|"classic"
-
----@class TaxiTimerLib-1.0_TaxiAreaRamp
----@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
----@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
-
--- A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
----@alias TaxiPathRow { [1]: number, [2]: number, [3]: number }
-
--- The rows of `ns.taxipath` split up into chunks.
----@alias TaxiPathStructDB table<number, TaxiPathRow[]>
-
--- A row of `ns.taxipathnode` where the columns are indexed using `ns.TAXIPATHNODE`.
----@alias TaxiPathNodeRow { [1]: number, [2]: number, [3]: number, [4]: number, [5]: number, [6]: number, [7]: number, [8]: number }
-
--- The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
----@alias TaxiPathNodeStructDB table<number, TaxiPathNodeRow[]>
-
-local TAXIPATH = lib.db.TAXIPATH
-local TAXIPATHNODE = lib.db.TAXIPATHNODE
-local TaxiPath = lib.db.taxipath
-local TaxiPathNode = lib.db.taxipathnode
-
---
--- Taxi
+-- MARK: Flight pathing
 --
 
 -- The speeds that come with the `sim_` file of the game are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
@@ -340,11 +357,11 @@ local TAXI_SPEED_FALLBACK = 30+1/3
 -- The speed of the taxi maps the `sim_` file of the game does not have another speed for.
 lib.TAXI_SPEED_FALLBACK = TAXI_SPEED_FALLBACK
 
---- Returns the speed the taxi map is flown at.
+-- Returns the speed the taxi map is flown at.
 ---@param areaID? number
 ---@return number
 function lib.Speed(areaID)
-	local areaSpeeds = lib.sim.AREA_SPEEDS
+	local areaSpeeds = lib.Sim.AREA_SPEEDS
 	local speed = areaID and areaSpeeds and areaSpeeds[areaID]
 
 	if speed then
@@ -357,7 +374,7 @@ end
 local TAXI_PATH_NODE_FLAG_TELEPORT = 0x1 -- the flight continues at the next point without flying the distance between
 local TAXI_PATH_NODE_FLAG_STOP = 0x2 -- the flight waits at this point for the amount of seconds in the delay field
 
---- Checks if the single bit `flag` is set in `flags`, without bit operations that not all versions of Lua have.
+-- Checks if the single bit `flag` is set in `flags`, without bit operations that not all versions of Lua have.
 ---@param flags number
 ---@param flag number
 local function HasFlag(flags, flag)
@@ -372,29 +389,22 @@ local RETRACE_DISTANCE_SQ = RETRACE_DISTANCE * RETRACE_DISTANCE
 local RETRACE_REACH = 250 -- yards (seen from above) the stretch must reach away from the taxi node, on the path arriving and the path leaving together
 local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongside the other before that stretch is skipped, fewer are left to the skip distance above
 
----@class TaxiPathSegment
----@field public points TaxiTimerLib-1.0_TaxiPathNode[]
----@field public distance? number The yards flown.
----@field public distance2D? number The yards flown as seen from above.
----@field public speed? number The average speed in yards per second.
----@field public intervals? number[] The yards flown between each point of the segment and the next.
-
 local hasLookup = false
 local pathLookup = {} ---@type table<number, table<number, number>> `[from][to] = pathId`
-local pathRows = {} ---@type table<number, TaxiPathNodeRow[]> `[pathId] = rows` in flight order
+local pathRows = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNodeRow[]> `[pathId] = rows` in flight order
 local pathNodes = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNode[]|false>
 
 -- the db is only walked once, the first time we need a path
 local function BuildLookup()
 	hasLookup = true
 
-	for i = 1, #TaxiPath do
-		local taxiPathChunk = TaxiPath[i]
+	for i = 1, #lib.DB.taxipath do
+		local taxiPathChunk = lib.DB.taxipath[i]
 
 		for j = 1, #taxiPathChunk do
 			local taxiPath = taxiPathChunk[j]
-			local fromId = taxiPath[lib.db.TAXIPATH.FROMTAXINODE]
-			local toId = taxiPath[TAXIPATH.TOTAXINODE]
+			local fromId = taxiPath[lib.DB.TAXIPATH.FROMTAXINODE]
+			local toId = taxiPath[lib.DB.TAXIPATH.TOTAXINODE]
 			local destinations = pathLookup[fromId]
 
 			if not destinations then
@@ -404,17 +414,17 @@ local function BuildLookup()
 
 			-- the first path between two nodes is the one used
 			if not destinations[toId] then
-				destinations[toId] = taxiPath[TAXIPATH.ID]
+				destinations[toId] = taxiPath[lib.DB.TAXIPATH.ID]
 			end
 		end
 	end
 
-	for i = 1, #TaxiPathNode do
-		local taxiPathChunk = TaxiPathNode[i]
+	for i = 1, #lib.DB.taxipathnode do
+		local taxiPathChunk = lib.DB.taxipathnode[i]
 
 		for j = 1, #taxiPathChunk do
 			local taxiPathNode = taxiPathChunk[j]
-			local pathId = taxiPathNode[TAXIPATHNODE.PATHID]
+			local pathId = taxiPathNode[lib.DB.TAXIPATHNODE.PATHID]
 			local rows = pathRows[pathId]
 
 			if not rows then
@@ -447,15 +457,15 @@ local function GetTaxiPathNodes(pathId)
 				local row = rows[i]
 
 				nodes[i] = {
-					x = row[TAXIPATHNODE.LOC_0],
-					y = row[TAXIPATHNODE.LOC_1],
-					z = row[TAXIPATHNODE.LOC_2],
-					id = row[TAXIPATHNODE.ID],
+					x = row[lib.DB.TAXIPATHNODE.LOC_0],
+					y = row[lib.DB.TAXIPATHNODE.LOC_1],
+					z = row[lib.DB.TAXIPATHNODE.LOC_2],
+					id = row[lib.DB.TAXIPATHNODE.ID],
 					pathId = pathId,
 					index = i,
-					map = row[TAXIPATHNODE.CONTINENTID],
-					flags = row[TAXIPATHNODE.FLAGS],
-					delay = row[TAXIPATHNODE.DELAY],
+					map = row[lib.DB.TAXIPATHNODE.CONTINENTID],
+					flags = row[lib.DB.TAXIPATHNODE.FLAGS],
+					delay = row[lib.DB.TAXIPATHNODE.DELAY],
 				}
 			end
 		end
@@ -605,7 +615,7 @@ local function IsFarFromEdge(edge, node)
 	return IsTeleport(node) or IsStop(node)
 end
 
---- Checks if `node` is close to any of the points of the path `nodes`, height included.
+-- Checks if `node` is close to any of the points of the path `nodes`, height included.
 ---@param node TaxiTimerLib-1.0_TaxiPathNode
 ---@param nodes TaxiTimerLib-1.0_TaxiPathNode[]
 local function IsNearPath(node, nodes)
@@ -630,8 +640,8 @@ local function IsNearPath(node, nodes)
 	return false
 end
 
---- Returns the last point flown of the path arriving at a taxi node and the first point flown of the path leaving it, if the two paths run alongside each other at the node.
---- Where the way out of a taxi node goes back along the way in (like Ironforge between Kharanos and Menethil Harbor) the game does not fly in and back out, it flies from where the paths come together to where they part again.
+-- Returns the last point flown of the path arriving at a taxi node and the first point flown of the path leaving it, if the two paths run alongside each other at the node.
+-- Where the way out of a taxi node goes back along the way in (like Ironforge between Kharanos and Menethil Harbor) the game does not fly in and back out, it flies from where the paths come together to where they part again.
 ---@param arriving TaxiTimerLib-1.0_TaxiPathNode[]
 ---@param leaving TaxiTimerLib-1.0_TaxiPathNode[]
 ---@return number? last, number? first
@@ -679,9 +689,9 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	local firstFlown = {} ---@type table<number, number> `[pathIndex] = index` of the first point of the path that is flown, if not all of it is
 	local lastFlown = {} ---@type table<number, number> `[pathIndex] = index` of the last point of the path that is flown, if not all of it is
 
-	local exceptions = lib.sim.RETRACE_EXCEPTIONS
+	local exceptions = lib.Sim.RETRACE_EXCEPTIONS
 
-	for pathIndex = 1, lib.sim.SKIP_RETRACED and numPaths - 1 or 0 do
+	for pathIndex = 1, lib.Sim.SKIP_RETRACED and numPaths - 1 or 0 do
 		-- the game flies into some taxi nodes and back out whole, however much the two paths run alongside each other
 		local last, first
 		if not (exceptions and exceptions[nodeIds[pathIndex]]) then
@@ -695,7 +705,7 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	end
 
 	-- the joins that were seen to be flown another way than the rules above give
-	local nodeJoins = lib.sim.NODE_JOINS
+	local nodeJoins = lib.Sim.NODE_JOINS
 
 	for pathIndex = 1, nodeJoins and numPaths - 1 or 0 do
 		local joins = nodeJoins[nodeIds[pathIndex]]
@@ -741,7 +751,7 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 end
 
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[]
----@return TaxiTimerLib-1.0_TaxiPathNode[] points, TaxiPathSegment[] segments, number delay
+---@return TaxiTimerLib-1.0_TaxiPathNode[] points, TaxiTimerLib-1.0_FlightSegment[] segments, number delay
 function lib.GetPointsFromNodes(nodes)
 	local paths = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[][]
 	local nodeIds = {} ---@type number[]
@@ -772,8 +782,8 @@ function lib.GetPointsFromNodes(nodes)
 	end
 
 	local points = JoinTaxiPaths(paths, nodeIds, fromIds)
-	local segments = {} ---@type TaxiPathSegment[]
-	local segment ---@type TaxiPathSegment?
+	local segments = {} ---@type TaxiTimerLib-1.0_FlightSegment[]
+	local segment ---@type TaxiTimerLib-1.0_FlightSegment?
 	local delay = 0
 
 	-- the points are split up where the flight doesn't fly from one point to the next (teleports and map changes)
@@ -800,7 +810,7 @@ end
 ---@param point TaxiTimerLib-1.0_TaxiPathNode
 ---@return number? speed
 local function GetPathSpeed(point)
-	local pathSpeeds = lib.sim.PATH_SPEEDS
+	local pathSpeeds = lib.Sim.PATH_SPEEDS
 	local speeds = pathSpeeds and pathSpeeds[point.pathId]
 
 	if not speeds then
@@ -824,7 +834,7 @@ end
 local function GetPointSpeeds(points, areaID)
 	local speeds = {} ---@type (number|false)[]
 	local numPoints = #points
-	local areaRamps = lib.sim.AREA_RAMPS
+	local areaRamps = lib.Sim.AREA_RAMPS
 	local ramp = areaID and areaRamps and areaRamps[areaID]
 	local isDynamic = false
 
@@ -834,7 +844,7 @@ local function GetPointSpeeds(points, areaID)
 		-- a speed that was set carries on into the next path, the game does not change it as a path begins
 		local previous = points[i - 1]
 
-		if not speed and lib.sim.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
+		if not speed and lib.Sim.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
 			speed = speeds[i - 1] or nil
 		end
 
@@ -862,7 +872,7 @@ end
 ---@param yards number
 ---@return number? speed
 local function GetSpacingSpeed(areaID, yards)
-	local areaSpacing = lib.sim.AREA_SPACING
+	local areaSpacing = lib.Sim.AREA_SPACING
 	local spacing = areaID and areaSpacing and areaSpacing[areaID]
 
 	if not spacing then
@@ -879,25 +889,33 @@ local function GetSpacingSpeed(areaID, yards)
 end
 
 --
--- Flight
+-- MARK: Flight information
 --
 
----@class FlightStep
+-- A stretch of a flight that is flown from point to point, the flight starts a new one where it jumps (teleports and map changes).
+---@class TaxiTimerLib-1.0_FlightSegment
+---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
+---@field public distance? number The yards flown.
+---@field public distance2D? number The yards flown as seen from above.
+---@field public speed? number The average speed in yards per second.
+---@field public intervals? number[] The yards flown between each point of the segment and the next.
+
+---@class TaxiTimerLib-1.0_FlightStep
 ---@field public distance number The yards flown between a point and the next.
 ---@field public speed number The speed in yards per second it is flown at.
 ---@field public distanceLeft number The yards left of the flight after it.
 ---@field public durationLeft number The seconds left of the flight after it.
 
----@class FlightGeometry The points a flight goes through and how far it is between them, which does not depend on how fast it is flown.
+---@class TaxiTimerLib-1.0_FlightGeometry The points a flight goes through and how far it is between them, which does not depend on how fast it is flown.
 ---@field public nodes TaxiTimerLib-1.0_TaxiRouteNode[]
 ---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
----@field public segments TaxiPathSegment[]
+---@field public segments TaxiTimerLib-1.0_FlightSegment[]
 ---@field public delay number The seconds the paths say the flight waits at stops along the way.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public distance number The yards flown.
 ---@field public distance2D number The yards flown as seen from above (without climbing and descending).
 
----@class FlightInfo
+---@class TaxiTimerLib-1.0_FlightInfo
 ---@field public distance number The yards flown.
 ---@field public distance2D number The yards flown as seen from above (without climbing and descending).
 ---@field public speed number The average speed in yards per second (`distance / speed` is the seconds spent flying).
@@ -906,8 +924,8 @@ end
 ---@field public delayIncluded boolean If the `delay` is part of the `duration`.
 ---@field public nodes TaxiTimerLib-1.0_TaxiRouteNode[]
 ---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
----@field public segments TaxiPathSegment[]
----@field public steps FlightStep[] The stretches between the points in the order they are flown.
+---@field public segments TaxiTimerLib-1.0_FlightSegment[]
+---@field public steps TaxiTimerLib-1.0_FlightStep[] The stretches between the points in the order they are flown.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
 ---@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at (with the `speedModifier`).
@@ -916,9 +934,9 @@ end
 
 local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
 
---- Returns the points a flight goes through and how far it is between them.
+-- Returns the points a flight goes through and how far it is between them.
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
----@return FlightGeometry
+---@return TaxiTimerLib-1.0_FlightGeometry
 function lib.GetFlightGeometry(nodes)
 	local points, segments, delay = lib.GetPointsFromNodes(nodes)
 	local maps = {} ---@type table<number, boolean>
@@ -949,18 +967,18 @@ function lib.GetFlightGeometry(nodes)
 	}
 end
 
---- Returns what the flight is estimated to be like at the speeds the game flies the taxi map at.
----@param geometry FlightGeometry
+-- Returns what the flight is estimated to be like at the speeds the game flies the taxi map at.
+---@param geometry TaxiTimerLib-1.0_FlightGeometry
 ---@param areaID? number
 ---@param speedModifier? number What the speeds are multiplied by for something that makes the flight path mount fly faster or slower (1.2 for 20% faster), the game side knows what that is.
----@return FlightInfo?
+---@return TaxiTimerLib-1.0_FlightInfo?
 function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	local modifier = speedModifier and speedModifier > 0 and speedModifier or 1
 	local areaSpeed = lib.Speed(areaID)
 	local speeds, isDynamic = GetPointSpeeds(geometry.points, areaID)
 
 	-- some taxi nodes have a mount that flies faster or slower than the others of the taxi map, the whole flight is flown on the mount of the node it starts at
-	local nodeSpeeds = lib.sim.NODE_SPEEDS
+	local nodeSpeeds = lib.Sim.NODE_SPEEDS
 	local firstNode = geometry.nodes[1]
 	local nodeSpeed = firstNode and nodeSpeeds and nodeSpeeds[firstNode.nodeID]
 
@@ -971,8 +989,8 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 
 	areaSpeed = areaSpeed * modifier
 
-	local segments = {} ---@type TaxiPathSegment[]
-	local steps = {} ---@type FlightStep[]
+	local segments = {} ---@type TaxiTimerLib-1.0_FlightSegment[]
+	local steps = {} ---@type TaxiTimerLib-1.0_FlightStep[]
 	local numSteps = 0
 	local numPoints = 0
 	local duration = 0
@@ -1021,9 +1039,9 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	end
 
 	if geometry.distance > 0 and duration > 0 then
-		local fixedTime = lib.sim.AREA_FIXED_TIME
+		local fixedTime = lib.Sim.AREA_FIXED_TIME
 
-		---@type FlightInfo
+		---@type TaxiTimerLib-1.0_FlightInfo
 		local info = {
 			distance = geometry.distance,
 			distance2D = geometry.distance2D,
@@ -1051,17 +1069,17 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	end
 end
 
---- Returns what the flight along the taxi nodes is estimated to be like.
+-- Returns what the flight along the taxi nodes is estimated to be like.
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@param areaID? number
 ---@param speedModifier? number See `GetFlightInfoFromGeometry`.
----@return FlightInfo?
+---@return TaxiTimerLib-1.0_FlightInfo?
 function lib.GetFlightInfoFromNodes(nodes, areaID, speedModifier)
 	return lib.GetFlightInfoFromGeometry(lib.GetFlightGeometry(nodes), areaID, speedModifier)
 end
 
 -- Returns the seconds left of the flight when the given yards are left of it, going by the speed of each stretch.
----@param info FlightInfo
+---@param info TaxiTimerLib-1.0_FlightInfo
 ---@param distance number
 ---@return number seconds
 function lib.GetFlightTimeLeft(info, distance)

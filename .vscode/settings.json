@@ -17,7 +17,8 @@
     "Lua.workspace.ignoreDir": [
         ".vscode",
         "libs\\LibStub",
-        "libs\\TaxiTimerLib\\db_*.lua"
+        "libs\\TaxiTimerLib\\db_*.lua",
+        "scripts\\recordings.lua"
     ],
     "Lua.diagnostics.disable": [
         "toc-file-name"
@@ -31,6 +32,7 @@
         "Stopwatch_StartCountdown",
         "Stopwatch_Toggle",
         "StopwatchFrame",
-        "StopwatchTicker"
+        "StopwatchTicker",
+        "SlashCmdList"
     ]
 }

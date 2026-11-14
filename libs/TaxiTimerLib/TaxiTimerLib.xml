@@ -1,0 +1,17 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
+..\FrameXML\UI.xsd">
+
+    <Include file="TaxiTimerLib.lua" />
+    <Include file="TaxiTimerLib-GameAPI.lua" />
+
+    <Include file="db_vanilla.lua [AllowLoadGameType vanilla]" />
+    <Include file="db_classic.lua [AllowLoadGameType classic]" />
+    <Include file="db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]" />
+    <Include file="db_mainline.lua [AllowLoadGameType standard]" />
+
+    <Include file="sim_vanilla.lua [AllowLoadGameType vanilla]" />
+    <Include file="sim_classic.lua [AllowLoadGameType classic]" />
+    <Include file="sim_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]" />
+    <Include file="sim_mainline.lua [AllowLoadGameType standard]" />
+
+</Ui>

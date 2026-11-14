@@ -77,6 +77,8 @@ local FIELDS = {
 }
 
 -- what the types of the rows of each file are called in the db file
+local LIB_NAME = "TaxiTimerLib-1.0" -- the library the db file is for, which has the types the db file is made of
+
 local TYPES = { TAXINODES = "TaxiNodesStruct", TAXIPATH = "TaxiPathStruct", TAXIPATHNODE = "TaxiPathNodeStruct" }
 
 local ROWS_PER_CHUNK = 8192 -- a function has a limit to how many constants it can have
@@ -84,7 +86,9 @@ local ROWS_PER_CHUNK = 8192 -- a function has a limit to how many constants it c
 local floor, ceil = math.floor, math.ceil
 local format, concat = string.format, table.concat
 
--- csv --------------------------------------------------------------------------------------------------------------------------
+--
+-- MARK: CSV
+--
 
 ---Splits a line of a csv file into its fields, fields can be in quotes with quotes in them doubled.
 ---@param line string
@@ -181,7 +185,9 @@ local function luaValue(value)
 	return '"' .. value:gsub('"', '\\"') .. '"'
 end
 
--- the parser -----------------------------------------------------------------------------------------------------------------
+--
+-- MARK: The parser
+--
 
 ---@class TaxiParser
 local Parser = {}
@@ -245,7 +251,9 @@ function Parser:canProcess()
 	return self.db.taxinodes ~= nil and self.db.taxipath ~= nil and self.db.taxipathnode ~= nil
 end
 
--- the db file ------------------------------------------------------------------------------------------------------------------
+--
+-- MARK: The db file
+--
 
 ---What the type of the rows of a file is called in the db file.
 ---@param name string The name of the file in upper case.
@@ -257,17 +265,17 @@ local function annotation(name, items)
 		return ""
 	end
 	if items then
-		return "---@type " .. type .. "DB\r\n"
+		return "---@type " .. LIB_NAME .. "_" .. (type:gsub("Struct$", "RowChunks")) .. "\r\n"
 	end
-	return "---@class " .. type .. "\r\n"
+	return "---@class " .. LIB_NAME .. "_" .. type .. "\r\n"
 end
 
----Writes the db file the addon loads for the game.
+---Writes the db file the library loads for the game, which hands its tables to the library.
 ---@param outfile string
-function Parser:write(outfile)
+---@param libMinor? number The version of the library the db file is for, the `MINOR` in `TaxiTimerLib.lua`.
+function Parser:write(outfile, libMinor)
 	local lua = {}
-	lua[#lua + 1] = "local ns = select(2, ...) ---@class taxi_ns_db\r\nlocal F\r\n"
-	lua[#lua + 1] = "ns = ns or {}"
+	lua[#lua + 1] = 'local MAJOR, MINOR = "' .. LIB_NAME .. '", ' .. (libMinor or 1) .. '\r\nlocal lib = LibStub(MAJOR, true)\r\nif not lib then return end\r\n\r\nlocal db = {} ---@class ' .. LIB_NAME .. '_DB\r\nlocal F'
 	io.write(format("Writing lua file for %s...\n", self.client))
 
 	local items = {} ---@type table<string, string[]>
@@ -285,7 +293,7 @@ function Parser:write(outfile)
 			end
 			local list = concat(fields, ",\r\n\t")
 			local upper = name:upper()
-			lua[#lua + 1] = "\r\n" .. annotation(upper, false) .. "ns." .. upper .. " = {\r\n\t" .. list .. (list ~= "" and "," or "-- TODO") .. "\r\n}"
+			lua[#lua + 1] = "\r\n" .. annotation(upper, false) .. "db." .. upper .. " = {\r\n\t" .. list .. (list ~= "" and "," or "-- TODO") .. "\r\n}"
 
 			local rows = {}
 			for _, row in ipairs(data.rows) do
@@ -309,22 +317,24 @@ function Parser:write(outfile)
 	for _, name in ipairs(FILES) do
 		local rows = items[name]
 		if rows and #rows > 0 then
-			lua[#lua + 1] = "\r\n" .. annotation(name:upper(), true) .. "ns." .. name .. " = {}"
+			lua[#lua + 1] = "\r\n" .. annotation(name:upper(), true) .. "db." .. name .. " = {}"
 			local chunk = 0
 			for first = 1, #rows, ROWS_PER_CHUNK do
 				chunk = chunk + 1
 				local last = math.min(first + ROWS_PER_CHUNK - 1, #rows)
-				lua[#lua + 1] = "F = function() ns." .. name .. "[" .. chunk .. "] = {" .. concat(rows, ",", first, last) .. "} end F() F = nil"
+				lua[#lua + 1] = "F = function() db." .. name .. "[" .. chunk .. "] = {" .. concat(rows, ",", first, last) .. "} end F() F = nil"
 			end
 		end
 	end
 
 	local file = assert(io.open(outfile, "wb"))
-	file:write(concat(lua, "\r\n"), "\r\n\r\nreturn ns\r\n")
+	file:write(concat(lua, "\r\n"), "\r\n\r\n---@diagnostic disable-next-line: deprecated\r\nlib.SetDatabase(db, MINOR)\r\n")
 	file:close()
 end
 
--- the svg files ----------------------------------------------------------------------------------------------------------------
+--
+-- MARK: The svg files
+--
 
 -- the maps the coordinates are rotated and flipped for, others are reported
 local KNOWN_MAPS = {} ---@type table<number, boolean>

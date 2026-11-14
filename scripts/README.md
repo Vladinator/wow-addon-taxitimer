@@ -6,11 +6,11 @@ They need Lua 5.1 or later.
 
 | File | Purpose |
 | --- | --- |
-| `analyze.lua` | Compares recorded flights to the simulation and says what to change in the `sim_<game>.lua` files, or writes the changes itself. |
-| `launcher.lua` | Generates the `db_<game>.lua` files (and svg maps) from the csv files in the `csv_<game>` folders. |
+| `analyze.lua` | Compares recorded flights to the simulation and says what to change in the `libs/TaxiTimerLib/sim_<game>.lua` files, or writes the changes itself. |
+| `launcher.lua` | Generates the `libs/TaxiTimerLib/db_<game>.lua` files (and svg maps) from the csv files in the `csv_<game>` folders. |
 | `recordings.lua` | Every flight that was ever recorded. Written by `analyze.lua`, not by hand. |
 | `taxiparser.lua` | The csv reader and db/svg writer that `launcher.lua` uses. |
-| `shim.lua` | Lets the addon files run outside the game, in any Lua version. Used by the other scripts. |
+| `shim.lua` | Loads `libs/TaxiTimerLib` (with its LibStub and the db and sim of a game) and the saved variables in plain Lua, in any version from 5.1. Used by the other scripts. |
 | `meta.lua` | Type declarations for the language server. Nothing runs it. |
 | `analysis/` | The parts of `analyze.lua`. |
 
@@ -63,7 +63,7 @@ The games are `mainline`, `forever`, `classic` and `vanilla`. Without any, all f
 | Option | What it does |
 | --- | --- |
 | `--no-svg` | Only generate the db files. |
-| `--out=FOLDER` | Write the files to this folder instead of the addon and scripts folders. |
+| `--out=FOLDER` | Write the files to this folder instead of `libs/TaxiTimerLib` (db files) and the scripts folder (svg maps). |
 
 Commonly used:
 
