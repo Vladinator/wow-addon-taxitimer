@@ -596,8 +596,6 @@ end
 ---@type table<string, AddOnManifest>?
 local Frames do
 
-	---@class AddOnName : string
-
 	---@class AddOnManifest
 	---@field public loaded? boolean
 	---@field public OnLoad fun(manifest: AddOnManifest, frame: Frame)
@@ -666,7 +664,7 @@ local AddOn do
 	AddOn:RegisterEvent("ADDON_LOADED")
 
 	_G[format("SLASH_%s1", addonName)] = "/taxitimer"
-	SlashCmdList[addonName] = function(text)
+	SlashCmdList[addonName] = function()
 		local newState = not (SHOW_EXTRA_DEBUG_INFO or RECORD_FLIGHTS)
 		SHOW_EXTRA_DEBUG_INFO = newState
 		RECORD_FLIGHTS = newState
