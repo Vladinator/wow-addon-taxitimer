@@ -6,6 +6,7 @@
 ---@field util AnalysisUtil
 ---@field dir string The folder of the scripts.
 ---@field root string The folder of the addon.
+---@field reload? fun() Forgets the taxi data that was loaded, so the files of the addon are read again (after the sim file was changed).
 
 ---A taxi node from the csv files.
 ---@class TaxiDataNode
@@ -127,6 +128,10 @@ return function(ctx)
 			end
 		end
 		return nodes
+	end
+
+	ctx.reload = function()
+		cache = {}
 	end
 
 	return function(client, simFile)

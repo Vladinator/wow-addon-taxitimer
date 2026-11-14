@@ -12,11 +12,17 @@
 ---The speeds by the length of a stretch as `{ yards, speed }` in rising order.
 ---@alias SuggestSpacing number[][]
 
+---What was suggested for the sim file of a game.
+---@class SuggestedChanges
+---@field simFile string
+---@field data TaxiData
+---@field lines string[] The lines that say what to add, change or remove, as they were shown.
+
 ---The tables of the simulation that are changed for a moment.
----@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"PATH_SPEEDS"
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"
 
 ---@param ctx AnalysisContext
----@return fun(analyses: FlightAnalysis[], simFile?: string)
+---@return fun(analyses: FlightAnalysis[], simFile?: string, listJoins?: boolean): SuggestedChanges[]
 return function(ctx)
 	local util = ctx.util
 	local format, concat = string.format, table.concat
@@ -27,6 +33,8 @@ return function(ctx)
 	local SPACING_MIN_FLIGHTS = 5 -- flights needed on a taxi map before speeds by the length of the stretches are suggested for it
 	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
+	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
+	local JOIN_MIN_SECONDS = 3 -- seconds a flight must get closer to its estimate before another way of flying past a taxi node is suggested
 	local RAMP_MIN_SECONDS = 0.25 -- seconds the flights must get closer to their estimates on average before other speeds for taking off and landing are suggested
 
 	-- Changing the tables of the simulation for a moment ----------------------------------------------------------------
@@ -258,12 +266,177 @@ return function(ctx)
 		return format("%s on %d of %d flights%s", best == "" and "none" or best, #groups.byKey[best], total, #others > 0 and (" (" .. concat(others, "; ") .. ")") or "")
 	end
 
+	-- Flying past taxi nodes -----------------------------------------------------------------------------------------------------
+
+	-- `ns.NODE_JOINS` with the join of flying from `from` past `node` to `to` set to `join` (or without it), the tables that are changed are copies
+	---@param joins? table<number, table<number, table<number, number[]>>>
+	---@param node number
+	---@param from number
+	---@param to number
+	---@param join? number[]
+	---@return table<number, table<number, number[]>> ofNode What to have for `node`.
+	local function withJoin(joins, node, from, to, join)
+		local ofNode = {}
+		for fromNode, toNodes in pairs(joins and joins[node] or {}) do
+			local copy = {}
+			for toNode, value in pairs(toNodes) do
+				copy[toNode] = value
+			end
+			ofNode[fromNode] = copy
+		end
+		ofNode[from] = ofNode[from] or {}
+		ofNode[from][to] = join
+		return ofNode
+	end
+
+	-- the lines for `NODE_JOINS` where the flights went past a taxi node another way than the simulation flies it
+	---@param ns taxi_ns_db
+	---@param analyses FlightAnalysis[]
+	---@param list boolean If every taxi node that was flown past is listed.
+	---@return string[] lines
+	local function suggestJoins(ns, analyses, list)
+		---@class SuggestJoin
+		---@field node number
+		---@field from number
+		---@field to number
+		---@field flights FlightAnalysis[]
+		---@field seen table<string, number> How many flights flew each `last, first`.
+		---@field whole number How many flights flew all of the two paths.
+
+		local joins, order = {}, {} ---@type table<string, SuggestJoin>, string[]
+		for _, a in ipairs(analyses) do
+			local route = a.record.route or {}
+			if not a.incomplete and #a.track >= 2 and a.record.area and a:geometry() then
+				for k = 2, #route - 1 do
+					local from, node, to = route[k - 1], route[k], route[k + 1]
+					local arriving = a.data.paths[from] and a.data.paths[from][node]
+					local leaving = a.data.paths[node] and a.data.paths[node][to]
+					if arriving and leaving then
+						local key = format("%d %d %d", node, from, to)
+						local join = joins[key]
+						if not join then
+							join = { node = node, from = from, to = to, flights = {}, seen = {}, whole = 0 }
+							joins[key] = join
+							order[#order + 1] = key
+						end
+						-- a flight is only counted once for a join, also if it flies past it more than once
+						if join.flights[#join.flights] ~= a then
+							join.flights[#join.flights + 1] = a
+							local last, first, whole = a:flownJoin(arriving, leaving)
+							local flown = last and format("%d, %d", last, first) or "?"
+							join.seen[flown] = (join.seen[flown] or 0) + 1
+							join.whole = join.whole + (whole and 1 or 0)
+						end
+					end
+				end
+			end
+		end
+		table.sort(order)
+
+		-- how far off the flights are with the joins the simulation has now
+		---@param flights FlightAnalysis[]
+		---@return number seconds
+		---@return number yards How far the distance the simulation flies is from what was flown.
+		local function offBy(flights)
+			local total, yards = 0, 0
+			for _, a in ipairs(flights) do
+				local nodes = {} ---@type TaxiRouteNode[]
+				for i, id in ipairs(a.record.route) do
+					nodes[i] = { nodeID = id }
+				end
+				local geometry = ns.GetFlightGeometry(nodes)
+				local info = ns.GetFlightInfoFromGeometry(geometry, a.record.area)
+				total = total + (info and abs(a.actual - a.jumpTime - info.duration) or 0)
+				yards = yards + (a.hasOverride and 0 or abs(a.travelled - geometry.distance))
+			end
+			return total, yards
+		end
+
+		local lines = {}
+		local kept = {} ---@type (fun())[] What puts back the changes that are suggested, they stay while the rest is looked at so two changes for the same flight are not both suggested for what one of them does.
+		local excepted = {} ---@type table<number, boolean> The taxi nodes that were suggested for `RETRACE_EXCEPTIONS`.
+		if list then
+			print("\nThe taxi nodes that were flown past (last is the last point flown of the path arriving, first is the first point flown of the path leaving, off is the seconds each flight is off by now and would be with what was flown in NODE_JOINS)")
+			print("  flights  last, first  off now   with  taxi node")
+		end
+		for _, key in ipairs(order) do
+			local join = joins[key]
+			local node, from, to = join.node, join.from, join.to
+			local count = #join.flights
+			local has = ns.NODE_JOINS and ns.NODE_JOINS[node] and ns.NODE_JOINS[node][from] and ns.NODE_JOINS[node][from][to]
+			local name = format("%s, flying from %s to %s", join.flights[1].data.nodeName(node), join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to))
+			local plural = count == 1 and "" or "s"
+
+			-- what all of the flights flew, if they agree
+			local flown ---@type string?
+			for seen, flights in pairs(join.seen) do
+				if flights == count and seen ~= "?" then
+					flown = seen
+				end
+			end
+
+			local now, nowYards = offBy(join.flights)
+			local with ---@type number?
+			if flown and not (has and format("%d, %d", has[1], has[2]) == flown) then
+				local last, first = flown:match("^(%d+), (%d+)$")
+				local flownJoin = withJoin(ns.NODE_JOINS, node, from, to, { tonumber(last), tonumber(first) })
+				local restore = override(ns, "NODE_JOINS", node, flownJoin)
+				local withYards
+				with, withYards = offBy(join.flights)
+				restore()
+				-- the flights have to get closer both in how long they take and in how far they fly, or it makes up for something else that is off
+				local closer = now - with >= JOIN_MIN_SECONDS * count and nowYards - withYards >= JOIN_MIN_YARDS * count
+				-- a taxi node that is flown into and back out whole only needs to be left out of the rule that skips where the paths run alongside each other
+				local excepts = false
+				if join.whole == count and closer and not (ns.RETRACE_EXCEPTIONS and ns.RETRACE_EXCEPTIONS[node]) then
+					local restoreException = override(ns, "RETRACE_EXCEPTIONS", node, true)
+					excepts = offBy(join.flights) - with < count
+					restoreException()
+				end
+				if excepts then
+					kept[#kept + 1] = override(ns, "RETRACE_EXCEPTIONS", node, true)
+					if not excepted[node] then
+						excepted[node] = true
+						lines[#lines + 1] = format("    add to RETRACE_EXCEPTIONS:    [%d] = true, -- %s (flown into and back out whole)", node, join.flights[1].data.nodeName(node))
+					end
+					lines[#lines + 1] = format("      %d flight%s from %s to %s, %.0f sec closer each with it", count, plural, join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to), (now - with) / count)
+				elseif closer then
+					kept[#kept + 1] = override(ns, "NODE_JOINS", node, flownJoin)
+					lines[#lines + 1] = format("    %s NODE_JOINS:    [%d] = { [%d] = { [%d] = { %s } } }, -- %s (%d flight%s, %.0f sec closer each with it)", has and "change in" or "add to", node, from, to, flown, name, count, plural, (now - with) / count)
+				end
+			elseif has then
+				-- the simulation may fly it right without the entry by now
+				local restore = override(ns, "NODE_JOINS", node, withJoin(ns.NODE_JOINS, node, from, to, nil))
+				local without = offBy(join.flights)
+				restore()
+				if without - now < JOIN_MIN_SECONDS * count then
+					kept[#kept + 1] = override(ns, "NODE_JOINS", node, withJoin(ns.NODE_JOINS, node, from, to, nil))
+					lines[#lines + 1] = format("    remove from NODE_JOINS:    [%d] = { [%d] = { [%d] = ... } } -- %s (the %d flight%s past it are as close without it)", node, from, to, name, count, plural)
+				end
+			end
+			if list then
+				local seen = {}
+				for _, what in ipairs(util.keys(join.seen)) do
+					seen[#seen + 1] = join.seen[what] == count and what or format("%s (%d)", what, join.seen[what])
+				end
+				printf("  %7d  %-11s  %7.1f  %5s  %s%s\n", count, concat(seen, " / "), now / count, with and format("%.1f", with / count) or "", name, has and " [in NODE_JOINS]" or "")
+			end
+		end
+		for i = #kept, 1, -1 do
+			kept[i]()
+		end
+		return lines
+	end
+
 	-- Suggestions ------------------------------------------------------------------------------------------------------------
 
 	--- Prints what to change in the sim file for the flights of a game to be estimated better.
 	---@param analyses FlightAnalysis[] The analyses of the flights, in the order they were recorded.
 	---@param simFile string The sim file, for what to say.
-	local function suggestClient(analyses, simFile)
+	---@param listJoins boolean If every taxi node that was flown past is listed with how it was flown.
+	---@return string[] suggestions The lines that say what to add, change or remove, as they were shown.
+	local function suggestClient(analyses, simFile, listJoins)
+		local suggestions = {} ---@type string[]
 		printf("\nSuggested changes to %s\n", simFile)
 		local ns = analyses[1].ns
 		local scale = ns.TAXI_SPEED_SCALE
@@ -580,8 +753,22 @@ return function(ctx)
 				changes = changes + 1
 				printf("\n  taxi map %d (%d flights, mostly flown at %d)\n", map, #info.flights, cruise)
 				print("  " .. concat(out, "\n  "))
+				for _, line in ipairs(out) do
+					suggestions[#suggestions + 1] = line
+				end
 			else
 				printf("\n  taxi map %d (%d flights, mostly flown at %d, off by %.1f sec on average and %.1f at worst): nothing to change\n", map, #info.flights, cruise, average, worst)
+			end
+		end
+
+		-- where the flights went past a taxi node another way than the simulation flies it
+		local joinLines = suggestJoins(ns, analyses, listJoins)
+		if #joinLines > 0 then
+			changes = changes + 1
+			print("\n  flying past taxi nodes")
+			for _, line in ipairs(joinLines) do
+				print(line)
+				suggestions[#suggestions + 1] = line
 			end
 		end
 
@@ -601,6 +788,7 @@ return function(ctx)
 			print("\n  paths with their own speeds")
 			for _, line in ipairs(lines) do
 				print(line)
+				suggestions[#suggestions + 1] = line
 			end
 			for _, line in ipairs(noteLines) do
 				print(line)
@@ -613,12 +801,16 @@ return function(ctx)
 			print("\n  the sim file already matches what was flown")
 		end
 		print("\n  the speeds are compared rounded to the nearest 5, and the time spent loading another map is left out of how long a flight took")
+		return suggestions
 	end
 
 	--- Prints the suggested changes for each of the games the flights are from.
 	---@param analyses FlightAnalysis[]
 	---@param simFile? string The sim file to compare to instead of the ones of the games.
-	return function(analyses, simFile)
+	---@param listJoins? boolean If every taxi node that was flown past is listed with how it was flown.
+	---@return SuggestedChanges[] suggested What was suggested for the sim file of each game.
+	return function(analyses, simFile, listJoins)
+		local suggested = {} ---@type SuggestedChanges[]
 		local clients = {} ---@type table<string, FlightAnalysis[]>
 		local order = {} ---@type string[]
 		for _, a in ipairs(analyses) do
@@ -630,7 +822,9 @@ return function(ctx)
 			clients[client][#clients[client] + 1] = a
 		end
 		for _, client in ipairs(order) do
-			suggestClient(clients[client], simFile or (ctx.root .. "/sim_" .. client .. ".lua"))
+			local file = simFile or (ctx.root .. "/sim_" .. client .. ".lua")
+			suggested[#suggested + 1] = { simFile = file, data = clients[client][1].data, lines = suggestClient(clients[client], file, listJoins or false) }
 		end
+		return suggested
 	end
 end

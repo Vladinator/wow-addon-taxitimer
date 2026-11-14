@@ -279,6 +279,162 @@ return function(ctx)
 		return split
 	end
 
+	--- What the simulation estimates for the flight with the sim file as it is now (the estimate of the record is what the addon gave when it was flown).
+	---@return FlightInfo?
+	function Flight:replay()
+		local geometry = self:geometry()
+		if not geometry or not self.record.area then
+			return nil
+		end
+		return self.ns.GetFlightInfoFromGeometry(geometry, self.record.area)
+	end
+
+	-- seconds the flight took longer (positive) or shorter (negative) than the simulation gives now, the time spent loading another map is left out
+	---@return number?
+	function Flight:errorNow()
+		local info = self:replay()
+		if not info then
+			return nil
+		end
+		return self.actual - self.jumpTime - info.duration
+	end
+
+	-- when we first passed a point after `after` seconds, going by the samples of the flight
+	---@param point TaxiDataPoint
+	---@param after number
+	---@return number? seconds
+	function Flight:passedAt(point, after)
+		local track = self.track
+		local nearSq = self.near * self.near
+		for j = 2, #track do
+			local from, to = track[j - 1], track[j]
+			if to.t > after and from.map == point.map and to.map == point.map and self.steps[j].kind == "move" then
+				-- the place between the two samples that is closest to the point
+				local dx, dy = to.x - from.x, to.y - from.y
+				local lengthSq = dx * dx + dy * dy
+				local along = lengthSq > 0 and ((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSq or 0
+				along = max(0, min(1, along))
+				local px, py = from.x + dx * along - point.x, from.y + dy * along - point.y
+				local t = from.t + (to.t - from.t) * along
+				if px * px + py * py <= nearSq and t > after then
+					return t
+				end
+			end
+		end
+	end
+
+	-- the last point we flew of the path arriving at a taxi node and the first point we flew of the path leaving it, going by the samples of the flight
+	---@param arriving number The id of the path.
+	---@param leaving number The id of the path.
+	---@return number? last
+	---@return number? first
+	---@return boolean? whole If all of the two paths was flown at the taxi node.
+	function Flight:flownJoin(arriving, leaving)
+		local data = self.data
+		local arrivingPoints, leavingPoints = data.pathPoints[arriving], data.pathPoints[leaving]
+		if not arrivingPoints or not leavingPoints then
+			return
+		end
+		-- the points of the path arriving are passed one after the other until the first one we did not pass
+		local last, t = nil, -INF
+		for i = 1, #arrivingPoints do
+			local passed = self:passedAt(data.points[arrivingPoints[i]], t)
+			if passed then
+				last, t = i, passed
+			elseif last then
+				break
+			end
+		end
+		if not last then
+			return
+		end
+		-- the first point of the path leaving that we passed after that, and went on to the next from
+		local count = #leavingPoints
+		for i = 1, count do
+			local passed = self:passedAt(data.points[leavingPoints[i]], t)
+			if passed and (i == count or self:passedAt(data.points[leavingPoints[i + 1]], passed)) then
+				return last, i, last == #arrivingPoints and i == 1
+			end
+		end
+	end
+
+	--- What makes the flight differ from what the simulation gives now, as lines to show: the distance, how the taxi nodes were flown past, the speed of the paths and the time spent loading.
+	---@param seconds number The seconds a cause must add or take away to be shown.
+	---@return string[]
+	function Flight:whyOff(seconds)
+		local lines = {} ---@type string[]
+		local info, geometry = self:replay(), self:geometry()
+		if not info or not geometry then
+			return lines
+		end
+		local data = self.data
+		local scale = self.ns.TAXI_SPEED_SCALE
+
+		-- flying further or shorter than the simulation is about how the taxi nodes are flown past
+		local yards = self.travelled - geometry.distance
+		if not self.hasOverride and info.areaSpeed > 0 and abs(yards) / info.areaSpeed >= seconds then
+			lines[#lines + 1] = format("distance: flew %.0f yd %s than the simulation flies (%.0f against %.0f), %.1f sec at %.0f yd/sec", abs(yards), yards < 0 and "less" or "more", self.travelled, geometry.distance, abs(yards) / info.areaSpeed, info.areaSpeed)
+			local route = self.record.route or {}
+			for k = 2, #route - 1 do
+				local from, node, to = route[k - 1], route[k], route[k + 1]
+				local arriving = data.paths[from] and data.paths[from][node]
+				local leaving = data.paths[node] and data.paths[node][to]
+				if arriving and leaving then
+					local last, first, whole = self:flownJoin(arriving, leaving)
+					if last then
+						lines[#lines + 1] = format("  past %s: flew the path in up to point %d of %d and the path out from point %d%s", data.nodeName(node), last, #data.pathPoints[arriving], first, whole and " (all of both)" or "")
+					else
+						lines[#lines + 1] = format("  past %s: the samples do not show how it was flown", data.nodeName(node))
+					end
+				end
+			end
+		end
+
+		-- the paths that were flown faster or slower than the simulation flies them
+		local _, intervals = self:observe()
+		local byPath, order = {}, {} ---@type table<number, { observed: number, predicted: number, flown: table<number, boolean>, used: table<number, boolean> }>, number[]
+		for i, interval in ipairs(intervals) do
+			local step = info.steps[i]
+			if interval.speed and step and step.speed > 0 then
+				local path = byPath[interval.path]
+				if not path then
+					path = { observed = 0, predicted = 0, flown = {}, used = {} }
+					byPath[interval.path] = path
+					order[#order + 1] = interval.path
+				end
+				path.observed = path.observed + interval.yards / (interval.speed * scale)
+				path.predicted = path.predicted + step.distance / step.speed
+				path.flown[interval.speed] = true
+				path.used[util.round(step.speed / scale / 5) * 5] = true
+			end
+		end
+		for _, id in ipairs(order) do
+			local path = byPath[id]
+			local diff = path.observed - path.predicted
+			if abs(diff) >= seconds then
+				local flown, used = {}, {}
+				for _, speed in ipairs(util.keys(path.flown)) do
+					flown[#flown + 1] = tostring(speed)
+				end
+				for _, speed in ipairs(util.keys(path.used)) do
+					used[#used + 1] = tostring(speed)
+				end
+				lines[#lines + 1] = format("speed: path %d (%s) was flown at %s where the simulation uses %s, %+.1f sec", id, data.pathName(id) or "?", concat(flown, "/"), concat(used, "/"), diff)
+			end
+		end
+
+		if self.stillTime >= seconds then
+			lines[#lines + 1] = format("standing still: %.1f sec", self.stillTime)
+		end
+		if self.jumpTime > 0 then
+			lines[#lines + 1] = format("loading: %.1f sec spent loading another map is left out", self.jumpTime)
+		end
+		if #lines == 0 then
+			lines[#lines + 1] = "nothing stands out: the distance and the speed of each path are close, so it is spread over the flight (how it takes off and lands, or the speeds by the length of the stretches)"
+		end
+		return lines
+	end
+
 	---@return string
 	function Flight:routeName()
 		local names = {}
