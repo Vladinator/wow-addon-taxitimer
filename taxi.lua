@@ -647,7 +647,8 @@ end
 ---@field public steps FlightStep[] The stretches between the points in the order they are flown.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
----@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at.
+---@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at (with the `speedModifier`).
+---@field public speedModifier number What every speed of the flight was multiplied by (1 if nothing makes the flight path mount fly faster or slower).
 ---@field public donotadjustarrivaltime? boolean
 
 local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
@@ -688,8 +689,10 @@ end
 --- Returns what the flight is estimated to be like at the speeds the game flies the taxi map at.
 ---@param geometry FlightGeometry
 ---@param areaID? number
+---@param speedModifier? number What the speeds are multiplied by for something that makes the flight path mount fly faster or slower (1.2 for 20% faster), the game side knows what that is.
 ---@return FlightInfo?
-local function GetFlightInfoFromGeometry(geometry, areaID)
+local function GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
+	local modifier = speedModifier and speedModifier > 0 and speedModifier or 1
 	local areaSpeed = Speed(areaID)
 	local speeds, isDynamic = GetPointSpeeds(geometry.points, areaID)
 
@@ -702,6 +705,8 @@ local function GetFlightInfoFromGeometry(geometry, areaID)
 		areaSpeed = nodeSpeed * TAXI_SPEED_SCALE
 		isDynamic = true -- the speed of the taxi map says nothing about the speed we fly at
 	end
+
+	areaSpeed = areaSpeed * modifier
 
 	local segments = {} ---@type TaxiPathSegment[]
 	local steps = {} ---@type FlightStep[]
@@ -720,6 +725,7 @@ local function GetFlightInfoFromGeometry(geometry, areaID)
 
 			if speed then
 				isDynamic = true
+				speed = speed * modifier
 			else
 				speed = areaSpeed
 			end
@@ -769,6 +775,7 @@ local function GetFlightInfoFromGeometry(geometry, areaID)
 			maps = geometry.maps,
 			dynamicSpeed = isDynamic,
 			areaSpeed = areaSpeed,
+			speedModifier = modifier,
 		}
 
 		if INCLUDE_STOP_DELAYS then
@@ -784,9 +791,10 @@ end
 --- Returns what the flight along the taxi nodes is estimated to be like.
 ---@param nodes TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@param areaID? number
+---@param speedModifier? number See `GetFlightInfoFromGeometry`.
 ---@return FlightInfo?
-local function GetFlightInfoFromNodes(nodes, areaID)
-	return GetFlightInfoFromGeometry(GetFlightGeometry(nodes), areaID)
+local function GetFlightInfoFromNodes(nodes, areaID, speedModifier)
+	return GetFlightInfoFromGeometry(GetFlightGeometry(nodes), areaID, speedModifier)
 end
 
 -- Returns the seconds left of the flight when the given yards are left of it, going by the speed of each stretch.

@@ -286,7 +286,7 @@ return function(ctx)
 		if not geometry or not self.record.area then
 			return nil
 		end
-		return self.ns.GetFlightInfoFromGeometry(geometry, self.record.area)
+		return self.ns.GetFlightInfoFromGeometry(geometry, self.record.area, self.record.speedModifier)
 	end
 
 	-- seconds the flight took longer (positive) or shorter (negative) than the simulation gives now, the time spent loading another map is left out
@@ -472,7 +472,8 @@ return function(ctx)
 	---@param speed number
 	---@return number
 	function Flight:roundSpeed(speed)
-		return floor(speed / self.ns.TAXI_SPEED_SCALE / 5 + 0.5) * 5
+		-- what makes the flight path mount fly faster (like Frequent Flier) is not part of the speeds of the sim file
+		return floor(speed / self.ns.TAXI_SPEED_SCALE / (self.record.speedModifier or 1) / 5 + 0.5) * 5
 	end
 
 	-- Where the flight was ---------------------------------------------------------------------------------------------------

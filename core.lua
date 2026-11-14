@@ -11,11 +11,34 @@ local Speed = ns.Speed
 local GetFlightInfoFromNodes = ns.GetFlightInfoFromNodes
 local GetFlightTimeLeft = ns.GetFlightTimeLeft
 
+--- Returns what the flight path mount speed modifier (currently only relevant for Forever "Frequent Flier" legacy talent)
+---@return number
+local function GetSpeedModifier()
+	local modifiers = ns.SPEED_MODIFIERS
+	local modifier = 1
+
+	if modifiers then
+		---@diagnostic expect-next-line: deprecated
+		local IsSpellKnown = IsSpellKnown or C_SpellBook.IsSpellKnown ---@type fun(spell: number, ...: any): boolean
+
+		for i = 1, #modifiers do
+			local entry = modifiers[i]
+
+			if IsSpellKnown(entry.spellId) then
+				modifier = modifier * entry.multiplier
+			end
+		end
+	end
+
+	return modifier
+end
+
 --- Returns the speed we fly at, but never less than the taxi map is flown at as it is lower while taking off and landing.
 ---@param areaID? number
+---@param speedModifier? number
 ---@return number
-local function GetLiveSpeed(areaID)
-	local speed = Speed(areaID)
+local function GetLiveSpeed(areaID, speedModifier)
+	local speed = Speed(areaID) * (speedModifier or 1)
 
 	if not areaID then
 		return speed
@@ -76,7 +99,7 @@ local function GetFlightInfo(taxiNodes, from, to, areaID, otherNodes)
 	if not HasNode(to) then
 		nodes[#nodes + 1] = to
 	end
-	return GetFlightInfoFromNodes(nodes, areaID)
+	return GetFlightInfoFromNodes(nodes, areaID, GetSpeedModifier())
 end
 
 ---@param timeAmount number
@@ -150,6 +173,7 @@ local Recorder do
 	---@field public distance2D number Yards the flight was estimated to be as seen from above.
 	---@field public speed number Average speed of the estimate.
 	---@field public areaSpeed number Speed used for the taxi map.
+	---@field public speedModifier? number What every speed was multiplied by for spells that make the flight path mount faster or slower.
 	---@field public delay number Seconds of stops along the paths.
 	---@field public delayIncluded boolean If the stops were part of the estimate.
 	---@field public swapAxis? boolean If x and y of our position had to be swapped to match the points when looking for the nearest point.
@@ -293,6 +317,7 @@ local Recorder do
 				distance2D = Round(info.distance2D, 1),
 				speed = Round(info.speed, 2),
 				areaSpeed = Round(info.areaSpeed, 2),
+				speedModifier = Round(info.speedModifier, 3),
 				delay = info.delay,
 				delayIncluded = info.delayIncluded,
 				clicked = Round(GetTime(), 2),
@@ -463,7 +488,7 @@ local GPS do
 		}
 		-- our position is tracked as seen from above, so what we travel is scaled to match the flight distance that includes climbing and descending
 		local travelScale = info.distance2D > 0 and info.distance / info.distance2D or 1
-		local areaSpeed = Speed(state.areaID)
+		local areaSpeed = info.areaSpeed
 		Ticker = C_Timer.NewTicker(0.5, function()
 			if not GPSInfo.distance then
 				GPSInfo.distance = info.distance
@@ -478,7 +503,7 @@ local GPS do
 			if UnitOnTaxi("player") then
 				GPSInfo.wasOnTaxi = true
 				GPSInfo.lastOnTaxi = GetTime()
-				GPSInfo.speed = GetLiveSpeed(state.areaID)
+				GPSInfo.speed = GetLiveSpeed(state.areaID, info.speedModifier)
 				GPSInfo.x, GPSInfo.y, GPSInfo.z, GPSInfo.mapID = UnitPosition("player")
 				if GPSInfo.lastSpeed then
 					-- going from one map of the points to another the positions do not compare, but a map the points are not on shares its positions with the map they are on

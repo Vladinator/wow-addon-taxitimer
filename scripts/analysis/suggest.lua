@@ -76,7 +76,7 @@ return function(ctx)
 	local function modelError(ns, area, flights)
 		local sum, worst, count = 0, 0, 0
 		for _, flight in ipairs(flights) do
-			local info = ns.GetFlightInfoFromGeometry(flight.geometry, area)
+			local info = ns.GetFlightInfoFromGeometry(flight.geometry, area, flight.analysis.record.speedModifier)
 			if info then
 				local err = abs(flight.seconds - info.duration)
 				sum = sum + err
@@ -347,7 +347,7 @@ return function(ctx)
 					nodes[i] = { nodeID = id }
 				end
 				local geometry = ns.GetFlightGeometry(nodes)
-				local info = ns.GetFlightInfoFromGeometry(geometry, a.record.area)
+				local info = ns.GetFlightInfoFromGeometry(geometry, a.record.area, a.record.speedModifier)
 				total = total + (info and abs(a.actual - a.jumpTime - info.duration) or 0)
 				yards = yards + (a.hasOverride and 0 or abs(a.travelled - geometry.distance))
 			end
@@ -734,7 +734,7 @@ return function(ctx)
 					local function offBy()
 						local total = 0
 						for _, flight in ipairs(nodeFlights) do
-							local flightInfo = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+							local flightInfo = ns.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
 							total = total + (flightInfo and abs(flight.seconds - flightInfo.duration) or 0)
 						end
 						return total
@@ -767,7 +767,7 @@ return function(ctx)
 			ns.PATH_SPEEDS = {}
 			for _, flight in ipairs(flights) do
 				local a = flight.analysis
-				local without = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+				local without = ns.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
 				local paths = a:observe()
 				if without then
 					-- the stretches of each path in this flight, and the seconds the speeds of the taxi map give them
@@ -908,7 +908,7 @@ return function(ctx)
 			local function secondsOff()
 				local sum = 0
 				for _, flight in ipairs(flights) do
-					local result = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+					local result = ns.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
 					sum = sum + (result and abs(flight.seconds - result.duration) or 0)
 				end
 				return sum

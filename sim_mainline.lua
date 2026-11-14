@@ -46,6 +46,11 @@ ns.NODE_JOINS = {
 	},
 }
 
+-- Spells that make the flight path mount fly faster or slower, the speeds of the flight are multiplied by `multiplier` for a player that knows the spell (so it is not part of the speeds below).
+-- The addon checks if the spell is known as the flight is estimated, and the flight records the multiplier it used.
+ns.SPEED_MODIFIERS = {
+}
+
 -- Taxi nodes whose mount flies at another speed than the others of the taxi map. The whole flight is flown at that speed when it starts at the node, also the hops after the first.
 -- Paths in `PATH_SPEEDS` and the speeds of `AREA_RAMPS` and `AREA_SPACING` still have their own speeds.
 ns.NODE_SPEEDS = {
