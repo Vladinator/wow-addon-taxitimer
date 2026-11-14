@@ -598,7 +598,7 @@ local State do
 	function State:ButtonTooltip(button)
 		local info = self:GetFlightInfo()
 		if not info then
-			if SHOW_EXTRA_DEBUG_INFO then
+			if SHOW_EXTRA_DEBUG_INFO and self.from ~= self.to then
 				GameTooltip:AddLine(" ")
 				GameTooltip:AddLine(format("No taxi data for map: %s (%d nodes)", tostring(self.areaID), #self.nodes), 0.8, 0.8, 0.8, true)
 				GameTooltip:AddLine(format("From: %s", self.from and self.from.name or "N/A"), 0.8, 0.8, 0.8, true)

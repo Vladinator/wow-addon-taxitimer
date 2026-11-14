@@ -30,7 +30,7 @@ The output lists each flight with how far off the simulation is now, the flights
 | --- | --- |
 | `--apply` | Write the suggested changes to the sim file and analyze again until nothing is left. Unsure suggestions are shown, not written. |
 | `--coverage` | Show how much of each map has been flown, and the maps without flights. |
-| `--joins` | List every taxi node that was flown past, with the points flown there. |
+| `--joins` | List every taxi node that was flown past, with the points flown there, and a table of the nodes where the game could cut a loop with how much the cut saves (to see if one rule fits them all). |
 | `--speeds` | Show the speed each path was flown at from each of its points. |
 | `--flight=N` / `--all` | Show the details of flight N (can be repeated), or of every flight. |
 | `--worst=SECONDS` | How far off a flight must be to be listed with its cause (default 5). |

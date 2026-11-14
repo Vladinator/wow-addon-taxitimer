@@ -25,11 +25,13 @@ ns.AREA_SPEEDS = {
 	[2175] = 40, -- Zaralek Cavern
 	[2241] = 50, -- Emerald Dream
 	[2276] = 50, -- Khaz Algar
+	[2374] = 50, -- Undermine
 }
 
 -- Taxi nodes where the game flies into the node and back out when passing through it, whole paths, however much the paths in and out run alongside each other (see `SKIP_RETRACED`).
 ns.RETRACE_EXCEPTIONS = {
 	[303] = true, -- Valiance Landing Camp, Wintergrasp
+	[984] = true, -- Pang's Stead, Valley of the Four Winds
 }
 
 -- How the game flies past a taxi node where it was seen to do it another way than the rules of the simulation give.
@@ -37,7 +39,10 @@ ns.RETRACE_EXCEPTIONS = {
 -- `last` is the last point that is flown of the path arriving at `node`, and `first` the first point that is flown of the path leaving it.
 ns.NODE_JOINS = {
 	[2904] = { -- Eye of Ysera, The Emerald Dream
-		[2903] = { [2905] = { 11, 7 } }, -- Verdant Landing > Wellspring Overlook
+		[2903] = { [2905] = { 11, 7 } }, -- Verdant Landing, The Emerald Dream > Wellspring Overlook, The Emerald Dream
+	},
+	[3133] = { -- Fairbreeze Village, Eversong Woods
+		[3134] = { [3131] = { 7, 6 } }, -- Tranquillien, Eversong Woods > Sanctum of Light, Silvermoon City
 	},
 }
 
@@ -46,6 +51,9 @@ ns.NODE_JOINS = {
 ns.NODE_SPEEDS = {
 	[252] = 45, -- Wyrmrest Temple, Dragonblight
 }
+
+-- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
+ns.CARRY_SPEED = false
 
 -- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
 ns.AREA_FIXED_TIME = {

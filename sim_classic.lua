@@ -31,6 +31,9 @@ ns.NODE_JOINS = {
 ns.NODE_SPEEDS = {
 }
 
+-- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
+ns.CARRY_SPEED = false
+
 -- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
 ns.AREA_FIXED_TIME = {
 }

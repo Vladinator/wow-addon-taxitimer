@@ -32,6 +32,7 @@ return function(ctx)
 	local SPACING_YARDS = { 30, 45, 60, 80, 100, 130, 170, 220, 300 } -- the lengths a stretch between two points is sorted by when looking for the speed it is flown at
 	local SPACING_MIN_FLIGHTS = 5 -- flights needed on a taxi map before speeds by the length of the stretches are suggested for it
 	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
+	local PATH_MIN_NET_SECONDS = 1 -- seconds all of the flights on a taxi map must get closer to how long they took for a speed of a path to be suggested
 	local PATH_MIN_SEEN = 0.6 -- how much of a path must have been seen in flight for it to be given speeds of its own
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
 	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
@@ -172,9 +173,9 @@ return function(ctx)
 	---@param first number
 	---@param last number
 	---@return table<number, number> spread The speed flown from each point.
-	local function spreadSpeeds(speeds, first, last)
+	local function spreadSpeeds(speeds, first, last, initial)
 		local points = util.keys(speeds)
-		local speed = 0
+		local speed = initial or 0
 		for _, point in ipairs(points) do
 			if point <= first then
 				speed = speeds[point]
@@ -429,6 +430,96 @@ return function(ctx)
 		return lines
 	end
 
+	-- The flights that passed one taxi node where the rule that skips where the paths run alongside each other would cut something, and what the game did: how many yards the cut saves, and if the game made it.
+	-- This is to see if there is one rule for all taxi nodes (the game cuts when it saves less than some yards) or only the taxi nodes `RETRACE_EXCEPTIONS` and `NODE_JOINS` say.
+	---@param ns taxi_ns_db
+	---@param analyses FlightAnalysis[]
+	local function printRetraceCandidates(ns, analyses)
+		if not ns.SKIP_RETRACED then
+			return
+		end
+		---@type { analysis: FlightAnalysis, node: number, saved: number, share: number, seconds: number, cut: boolean }[]
+		local cases = {}
+		local keepExceptions, keepJoins = ns.RETRACE_EXCEPTIONS, ns.NODE_JOINS
+		ns.RETRACE_EXCEPTIONS, ns.NODE_JOINS = {}, {}
+		for _, a in ipairs(analyses) do
+			local route = a.record.route or {}
+			if not a.incomplete and not a.hasOverride and #route == 3 and #a.track >= 2 then
+				local nodes = {} ---@type TaxiRouteNode[]
+				for i, id in ipairs(route) do
+					nodes[i] = { nodeID = id }
+				end
+				ns.SKIP_RETRACED = true
+				local cutDistance = ns.GetFlightGeometry(nodes).distance
+				ns.SKIP_RETRACED = false
+				local wholeDistance = ns.GetFlightGeometry(nodes).distance
+				ns.SKIP_RETRACED = true
+				if wholeDistance - cutDistance > 1 then
+					local saved = wholeDistance - cutDistance
+					cases[#cases + 1] = {
+						analysis = a,
+						node = route[2],
+						saved = saved,
+						share = saved / wholeDistance * 100,
+						seconds = saved / max(a.record.areaSpeed or ns.TAXI_SPEED_FALLBACK, 1),
+						cut = abs(a.travelled - cutDistance) < abs(a.travelled - wholeDistance),
+					}
+				end
+			end
+		end
+		ns.RETRACE_EXCEPTIONS, ns.NODE_JOINS = keepExceptions, keepJoins
+		if #cases == 0 then
+			return
+		end
+		table.sort(cases, function(x, y)
+			return x.saved < y.saved
+		end)
+		print("\nThe taxi nodes where the game could cut a stretch where the paths run alongside each other (saved is the yards the cut saves)")
+		print("  saved yd  seconds  % of flight  game      flight  taxi node")
+		local nodes = {}
+		for _, case in ipairs(cases) do
+			printf("  %8.0f  %7.1f  %10.1f%%  %-8s  %6d  %s\n", case.saved, case.seconds, case.share, case.cut and "cut" or "flew all", case.analysis.index, case.analysis.data.nodeName(case.node))
+			nodes[case.node] = true
+		end
+		local numNodes = 0
+		for _ in pairs(nodes) do
+			numNodes = numNodes + 1
+		end
+		-- does one limit on what is saved tell the cuts from the flights that were not cut, for each way of measuring it
+		local numCut = 0
+		for _, case in ipairs(cases) do
+			numCut = numCut + (case.cut and 1 or 0)
+		end
+		if numCut == 0 or numCut == #cases then
+			print("  all of them went the same way, so there is nothing to tell them apart by yet")
+			return
+		end
+		local fits = {}
+		for _, measure in ipairs({ { "yards", "saved" }, { "seconds", "seconds" }, { "share of the flight", "share" } }) do
+			local maxCut, minWhole, maxWhole, minCut = -util.INF, util.INF, -util.INF, util.INF
+			for _, case in ipairs(cases) do
+				local value = case[measure[2]]
+				if case.cut then
+					maxCut, minCut = max(maxCut, value), min(minCut, value)
+				else
+					minWhole, maxWhole = min(minWhole, value), max(maxWhole, value)
+				end
+			end
+			if maxCut < minWhole then
+				fits[#fits + 1] = format("a cut saves less than the flights that were not cut (limit in %s between %.1f and %.1f)", measure[1], maxCut, minWhole)
+			elseif maxWhole < minCut then
+				fits[#fits + 1] = format("a cut saves more than the flights that were not cut (limit in %s between %.1f and %.1f)", measure[1], maxWhole, minCut)
+			end
+		end
+		if #fits == 0 then
+			printf("  none of the yards, the seconds or the share of the flight that a cut saves tells the cuts from the flights that were not cut (%d flights, %d taxi nodes), so it is something else\n", #cases, numNodes)
+		else
+			for _, line in ipairs(fits) do
+				printf("  %s\n", line)
+			end
+		end
+	end
+
 	-- Suggestions ------------------------------------------------------------------------------------------------------------
 
 	--- Prints what to change in the sim file for the flights of a game to be estimated better.
@@ -467,6 +558,7 @@ return function(ctx)
 
 		local changes = 0
 		local pathLines, pathNotes, pathOrder, small = {}, {}, {}, 0
+		local pathNew = {} ---@type table<number, table<number, number>|false> What each suggested line sets for the path (`false` to remove it), to see what it does to all of the flights on the path.
 		local sim = {
 			speeds = ns.AREA_SPEEDS or {},
 			ramps = ns.AREA_RAMPS or {},
@@ -688,6 +780,20 @@ return function(ctx)
 						end
 						list[#list + 1] = { interval = interval, step = without.steps[i] }
 					end
+					-- the order the paths were flown in with the speed each was entered and left at: a speed carries on into the next path, so a path that starts at the speed the one before it ended at does not set it
+					local runs, runOf = {}, {}
+					for _, interval in ipairs(flight.intervals) do
+						local run = runs[#runs]
+						if not run or run.path ~= interval.path then
+							run = { path = interval.path }
+							runs[#runs + 1] = run
+							runOf[interval.path] = runOf[interval.path] or #runs
+						end
+						if interval.speed then
+							run.entry = run.entry or interval.speed
+							run.exit = interval.speed
+						end
+					end
 					for _, path in ipairs(util.keys(paths)) do
 						local flown = paths[path]
 						local stretches = byPath[path]
@@ -709,9 +815,17 @@ return function(ctx)
 							if seen then
 								local gain = (predicted - observed) * (seenYards > 0 and totalYards / seenYards or 1)
 								local count = #a.data.pathPoints[path]
-								local whole = flown.first == 1 and flown.last == count
+								-- the last point of a path sets no speed as the flight does not go on from it, so a path flown up to the point before it was flown all the way
+								local whole = flown.first == 1 and flown.last >= count - 1
 								local name = a.data.pathName(path) or "?"
-								local had = sim.paths[path] and spreadSpeeds(sim.paths[path], flown.first, flown.last) or nil
+								local runIndex = runOf[path] or 1
+								local run, before = runs[runIndex] or {}, runs[runIndex - 1]
+								local inherited = ns.CARRY_SPEED and before ~= nil and before.exit ~= nil and run.entry == before.exit
+								-- the points we did not see at the ends of the path were skipped by the game as the flight passed a taxi node, and are not the start or the end of the flight
+								local nearlyWhole = ns.CARRY_SPEED and not (flown.first == 1 and flown.last == count)
+									and (flown.first == 1 or (runIndex > 1 and flown.first <= 4))
+									and (flown.last >= count - 1 or (runIndex < #runs and flown.last >= count - 4))
+								local had = sim.paths[path] and spreadSpeeds(sim.paths[path], flown.first, flown.last, inherited and run.entry or nil) or nil
 								local spread = spreadSpeeds(flown.speeds, flown.first, flown.last)
 								if had then
 									had[count] = nil -- the last point sets no speed as the flight ends there
@@ -732,23 +846,43 @@ return function(ctx)
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
 										end
+										pathNew[path] = false
 										pathLines[path] = format("    remove from PATH_SPEEDS:    [%d] = ... -- %s (flight %d, only %s)", path, name, a.index, text)
 									elseif not had and flown.time > 0 and abs(gain) >= 1 then
 										small = small + 1
 									end
 								elseif not sameSpread(had, spread) then
-									if whole or uniform then
+									if whole or nearlyWhole or uniform then
 										local parts = {}
+										local newSpeeds = {} ---@type table<number, number>
 										if uniform then
-											parts[1] = format("[1] = %d", next(distinct))
+											if not inherited then
+												parts[1] = format("[1] = %d", next(distinct))
+												newSpeeds[1] = next(distinct)
+											end
 											text = text .. format(", points %d to %d of %d were flown, all at one speed", flown.first, flown.last, count)
 										else
 											for _, point in ipairs(util.keys(flown.speeds)) do
-												if point ~= count then
+												-- the speed it was entered at is the one the path before it left at, so it is not the path that sets it
+												if point ~= count and not (inherited and point == flown.first) then
 													parts[#parts + 1] = format("[%d] = %d", point, flown.speeds[point])
+													newSpeeds[point] = flown.speeds[point]
 												end
 											end
+											if not whole then
+												text = text .. format(", points %d to %d of %d were flown", flown.first, flown.last, count)
+											end
 										end
+										if #parts == 0 then
+											-- nothing is set by this path, a speed it was given in the sim file is carried on from the path before it
+											if had and sim.paths[path] then
+												if not pathLines[path] then
+													pathOrder[#pathOrder + 1] = path
+												end
+												pathNew[path] = false
+												pathLines[path] = format("    remove from PATH_SPEEDS:    [%d] = ... -- %s (flight %d, the speed is carried on from the path before it)", path, name, a.index)
+											end
+										else
 										local unsure = {}
 										for i, point in ipairs(flown.unsure) do
 											unsure[i] = tostring(point)
@@ -756,7 +890,9 @@ return function(ctx)
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
 										end
+										pathNew[path] = newSpeeds
 										pathLines[path] = format("    %s PATH_SPEEDS:    [%d] = { %s }, -- %s (flight %d, %s%s)", had and "change in" or "add to", path, concat(parts, ", "), name, a.index, text, #unsure > 0 and (", not sure about point " .. concat(unsure, ", ")) or "")
+										end
 									elseif not pathLines[path] then
 										pathNotes[path] = format("    path %d (%s) is %s%s, but flight %d only flew points %d to %d of %d. Fly it on its own (not passing through its ends) to get all of it", path, name, text, had and " and differs from the sim file" or "", a.index, flown.first, flown.last, count)
 									end
@@ -767,6 +903,29 @@ return function(ctx)
 				end
 			end
 			ns.PATH_SPEEDS = savedPaths
+
+			-- a path is flown by more than the flight it was seen on, so what a line sets must make all of the flights on the path closer to how long they took, or the flights disagree
+			local function secondsOff()
+				local sum = 0
+				for _, flight in ipairs(flights) do
+					local result = ns.GetFlightInfoFromGeometry(flight.geometry, map)
+					sum = sum + (result and abs(flight.seconds - result.duration) or 0)
+				end
+				return sum
+			end
+			for _, path in ipairs(pathOrder) do
+				local new = pathNew[path]
+				if new ~= nil and pathLines[path] then
+					local before = secondsOff()
+					local restore = override(ns, "PATH_SPEEDS", path, new or nil)
+					local after = secondsOff()
+					restore()
+					if before - after < PATH_MIN_NET_SECONDS then
+						pathNotes[path] = format("    path %d (%s) would not make the flights on it any closer (%.1f sec off now, %.1f sec off with it), so the flights on it disagree or it needs other speeds, and it is left alone", path, (flights[1] and flights[1].analysis.data.pathName(path)) or "?", before, after)
+						pathLines[path] = nil
+					end
+				end
+			end
 
 			for i = #restores, 1, -1 do
 				restores[i]()
@@ -782,6 +941,10 @@ return function(ctx)
 			else
 				printf("\n  taxi map %d (%d flights, mostly flown at %d, off by %.1f sec on average and %.1f at worst): nothing to change\n", map, #info.flights, cruise, average, worst)
 			end
+		end
+
+		if listJoins then
+			printRetraceCandidates(ns, analyses)
 		end
 
 		-- where the flights went past a taxi node another way than the simulation flies it

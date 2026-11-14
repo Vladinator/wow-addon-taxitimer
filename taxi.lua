@@ -568,6 +568,13 @@ local function GetPointSpeeds(points, areaID)
 	for i = 1, numPoints do
 		local speed = GetPathSpeed(points[i])
 
+		-- a speed that was set carries on into the next path, the game does not change it as a path begins
+		local previous = points[i - 1]
+
+		if not speed and ns.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
+			speed = speeds[i - 1] or nil
+		end
+
 		if not speed and ramp then
 			local takeoff = ramp.takeoff[i]
 			local landing = ramp.landing[#ramp.landing - (numPoints - 1 - i)]
