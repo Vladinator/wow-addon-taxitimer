@@ -16,7 +16,8 @@
     ],
     "Lua.workspace.ignoreDir": [
         ".vscode",
-        "db_*.lua"
+        "libs\\LibStub",
+        "libs\\TaxiTimerLib\\db_*.lua"
     ],
     "Lua.diagnostics.disable": [
         "toc-file-name"

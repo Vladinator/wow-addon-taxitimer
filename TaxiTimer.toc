@@ -10,16 +10,17 @@
 ## X-Wago-ID: WqKQPy6x
 ## X-AddonProvider: github
 
-db_vanilla.lua [AllowLoadGameType vanilla]
-db_classic.lua [AllowLoadGameType classic]
-db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
-db_mainline.lua [AllowLoadGameType standard]
+libs\LibStub\LibStub.lua
+libs\TaxiTimerLib\TaxiTimerLib.lua
 
-sim_vanilla.lua [AllowLoadGameType vanilla]
-sim_classic.lua [AllowLoadGameType classic]
-sim_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
-sim_mainline.lua [AllowLoadGameType standard]
+libs\TaxiTimerLib\db_vanilla.lua [AllowLoadGameType vanilla]
+libs\TaxiTimerLib\db_classic.lua [AllowLoadGameType classic]
+libs\TaxiTimerLib\db_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
+libs\TaxiTimerLib\db_mainline.lua [AllowLoadGameType standard]
 
-catmul.lua
-taxi.lua
+libs\TaxiTimerLib\sim_vanilla.lua [AllowLoadGameType vanilla]
+libs\TaxiTimerLib\sim_classic.lua [AllowLoadGameType classic]
+libs\TaxiTimerLib\sim_forever.lua [AllowLoadGameType camelot][ExcludeLoadGameType vanilla, classic]
+libs\TaxiTimerLib\sim_mainline.lua [AllowLoadGameType standard]
+
 core.lua

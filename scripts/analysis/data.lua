@@ -29,8 +29,8 @@
 
 ---The taxi data of a game, and the simulation of the addon for it.
 ---@class TaxiData
----@field client TaxiFlavor
----@field ns taxi_ns_db The files of the addon for the game, without `core.lua`.
+---@field client TaxiTimerLib-1.0_TaxiFlavor
+---@field lib TaxiTimerLib-1.0 The lib for taxi data and simulation.
 ---@field nodes table<number, TaxiDataNode> By taxi node id.
 ---@field paths table<number, table<number, number>> `paths[from][to]` is the id of the first path between two taxi nodes, like the addon has it.
 ---@field points table<number, TaxiDataPoint> By point id.
@@ -40,7 +40,7 @@
 ---@field pathName fun(path: number): string?
 
 ---Loads the taxi data of a game, the first time it is asked for.
----@alias TaxiDataLoader fun(client: TaxiFlavor, simFile?: string): TaxiData?, string?
+---@alias TaxiDataLoader fun(client: TaxiTimerLib-1.0_TaxiFlavor, simFile?: string): TaxiData?, string?
 
 ---@param ctx AnalysisContext
 ---@return TaxiDataLoader
@@ -93,7 +93,7 @@ return function(ctx)
 	end
 
 	---The names and positions of the taxi nodes, the db the addon has does not have them.
-	---@param client TaxiFlavor
+	---@param client TaxiTimerLib-1.0_TaxiFlavor
 	---@return table<number, TaxiDataNode>
 	local function readNodes(client)
 		local nodes = {} ---@type table<number, TaxiDataNode>
@@ -148,7 +148,7 @@ return function(ctx)
 		local data ---@type TaxiData
 		data = {
 			client = client,
-			ns = ns,
+			lib = ns,
 			nodes = readNodes(client),
 			paths = {},
 			points = {},

@@ -3,18 +3,12 @@ local RECORD_FLIGHTS = false -- enable recording of paths to SV for later analys
 
 local addonName = ... ---@type string
 
-local ns = select(2, ...) ---@class taxi_ns_db
-
-ns = ns or {}
-
-local Speed = ns.Speed
-local GetFlightInfoFromNodes = ns.GetFlightInfoFromNodes
-local GetFlightTimeLeft = ns.GetFlightTimeLeft
+local lib = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
 
 --- Returns what the flight path mount speed modifier (currently only relevant for Forever "Frequent Flier" legacy talent)
 ---@return number
 local function GetSpeedModifier()
-	local modifiers = ns.SPEED_MODIFIERS
+	local modifiers = lib.sim.SPEED_MODIFIERS
 	local modifier = 1
 
 	if modifiers then
@@ -38,7 +32,7 @@ end
 ---@param speedModifier? number
 ---@return number
 local function GetLiveSpeed(areaID, speedModifier)
-	local speed = Speed(areaID) * (speedModifier or 1)
+	local speed = lib.Speed(areaID) * (speedModifier or 1)
 
 	if not areaID then
 		return speed
@@ -99,7 +93,7 @@ local function GetFlightInfo(taxiNodes, from, to, areaID, otherNodes)
 	if not HasNode(to) then
 		nodes[#nodes + 1] = to
 	end
-	return GetFlightInfoFromNodes(nodes, areaID, GetSpeedModifier())
+	return lib.GetFlightInfoFromNodes(nodes, areaID, GetSpeedModifier())
 end
 
 ---@param timeAmount number
@@ -161,7 +155,7 @@ local Recorder do
 	---@field public version number Format of the record.
 	---@field public addon string Version of the addon.
 	---@field public project number Game client (`WOW_PROJECT_ID`).
-	---@field public flavor? TaxiFlavor The game the flight was recorded on, named like its db file.
+	---@field public flavor? TaxiTimerLib-1.0_TaxiFlavor The game the flight was recorded on, named like its db file.
 	---@field public build number Game build number.
 	---@field public time number Server time when the flight was taken.
 	---@field public area? number The taxi map.
@@ -210,7 +204,7 @@ local Recorder do
 		return floor(value * mult + 0.5) / mult
 	end
 
-	---@param points TaxiPathNode[]
+	---@param points TaxiTimerLib-1.0_TaxiPathNode[]
 	---@param first number
 	---@param last number
 	---@param x number
@@ -305,7 +299,7 @@ local Recorder do
 				version = RECORD_VERSION,
 				addon = C_AddOns.GetAddOnMetadata(addonName, "Version") or "",
 				project = WOW_PROJECT_ID,
-				flavor = ns.FLAVOR,
+				flavor = lib.sim.FLAVOR,
 				build = tonumber((select(2, GetBuildInfo()))) or 0,
 				time = GetServerTime(),
 				area = state.areaID,
@@ -516,7 +510,7 @@ local GPS do
 						if GPSInfo.distance > 0 and GPSInfo.speed > 0 then
 							local timeCorrection = TAXI_TIME_CORRECT
 							-- the time left goes by the speed of each stretch that is left, and if the whole flight is at one speed also by how much faster than expected we fly
-							GPSInfo.timeLeft = GetFlightTimeLeft(info, GPSInfo.distance)
+							GPSInfo.timeLeft = lib.GetFlightTimeLeft(info, GPSInfo.distance)
 							if not info.dynamicSpeed then
 								GPSInfo.timeLeft = GPSInfo.timeLeft * areaSpeed / GPSInfo.speed
 							end
@@ -646,6 +640,7 @@ local State do
 			if info.delay > 0 then
 				GameTooltip:AddLine(format("Stops: %d seconds %s", info.delay, info.delayIncluded and "" or "(not included)"), 0.8, 0.8, 0.8, false)
 			end
+			GameTooltip:AddLine(format("Recording: %s", RECORD_FLIGHTS and "Yes" or "No"), 0.8, 0.8, 0.8, false)
 			GameTooltip:AddLine(" ")
 		end
 		GameTooltip:AddLine(format("~ %s flight time", GetTimeStringFromSeconds(info.duration, false, true)), 1, 1, 1, false)

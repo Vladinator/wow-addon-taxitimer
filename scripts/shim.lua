@@ -104,11 +104,11 @@ end
 -- The addon ------------------------------------------------------------------------------------------------------------
 
 -- The game types of the toc file, by the name the db and sim files of a game have.
-local GAME_TYPES = { mainline = "standard", vanilla = "vanilla", classic = "classic", forever = "camelot" } ---@type table<TaxiFlavor, string>
+local GAME_TYPES = { mainline = "standard", vanilla = "vanilla", classic = "classic", forever = "camelot" } ---@type table<TaxiTimerLib-1.0_TaxiFlavor, string>
 
 ---Returns the lua files the toc file loads for a game, in the order they are loaded.
 ---@param root string The folder of the addon.
----@param flavor TaxiFlavor
+---@param flavor TaxiTimerLib-1.0_TaxiFlavor
 ---@return string[]? files
 ---@return string? error
 function shim.files(root, flavor)
@@ -150,9 +150,9 @@ end
 
 ---Loads the files of the addon the way the game does for a game and returns what they put in the table they share.
 ---@param root string The folder of the addon.
----@param flavor TaxiFlavor
+---@param flavor TaxiTimerLib-1.0_TaxiFlavor
 ---@param options? ShimAddonOptions
----@return taxi_ns_db? ns
+---@return TaxiTimerLib-1.0_DB? ns
 ---@return string? error
 function shim.addon(root, flavor, options)
 	options = options or {}
@@ -165,7 +165,7 @@ function shim.addon(root, flavor, options)
 		skip[name] = true
 	end
 	local ns = {}
-	---@cast ns taxi_ns_db
+	---@cast ns TaxiTimerLib-1.0_DB
 	for _, name in ipairs(files) do
 		if not skip[name] then
 			local path = root .. "/" .. name
@@ -244,7 +244,7 @@ function Frame:IsShown() return self.shown end
 
 ---Provides the parts of the game the addon calls. They are in the table that is returned as `env`, which is what `core.lua` runs with.
 ---What it returns also has what to set up in the game: `clock`, `player`, `taxi`, `stopwatch`, `chat` and `tooltip`, and `advance(seconds)` to make time pass.
----@param flavor? TaxiFlavor
+---@param flavor? TaxiTimerLib-1.0_TaxiFlavor
 ---@return ShimGame game
 function shim.game(flavor)
 	flavor = flavor or "mainline"

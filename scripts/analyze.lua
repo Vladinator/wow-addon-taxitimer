@@ -68,7 +68,7 @@ local format = string.format
 local file ---@type string? The saved variables file.
 local wanted = {} ---@type table<number, boolean> The flights to show the details of.
 local all, speeds, suggest, joins = false, false, true, false
-local client ---@type TaxiFlavor? The game to use instead of the one the flights were recorded on.
+local client ---@type TaxiTimerLib-1.0_TaxiFlavor? The game to use instead of the one the flights were recorded on.
 local simFile ---@type string?
 local coverage = false
 local keepSuperseded = false
@@ -110,7 +110,7 @@ for _, option in ipairs(arg or {}) do
 	elseif option:match("^--sim=.+$") then
 		simFile = option:match("^--sim=(.+)$")
 	elseif option:match("^--client=%w+$") then
-		client = option:match("=(%w+)") --[[@as TaxiFlavor]]
+		client = option:match("=(%w+)") --[[@as TaxiTimerLib-1.0_TaxiFlavor]]
 	elseif option:match("^--near=[%d.]+$") then
 		near = tonumber(option:match("=([%d.]+)")) or near
 	elseif option:match("^--far=[%d.]+$") then
@@ -162,7 +162,7 @@ end
 
 -- the game to compare a flight to, newer records say which game they are from, named like its db file
 ---@param record FlightRecord
----@return TaxiFlavor
+---@return TaxiTimerLib-1.0_TaxiFlavor
 local function getClient(record)
 	if type(record.flavor) == "string" then
 		return record.flavor

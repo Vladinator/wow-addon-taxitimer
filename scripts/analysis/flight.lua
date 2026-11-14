@@ -39,7 +39,7 @@
 ---@field index number The number of the flight among the recorded ones.
 ---@field record FlightRecord
 ---@field data TaxiData
----@field ns taxi_ns_db
+---@field lib TaxiTimerLib-1.0
 ---@field near number
 ---@field far number
 ---@field warnings string[]
@@ -91,7 +91,7 @@ return function(ctx)
 			index = index,
 			record = record,
 			data = data,
-			ns = data.ns,
+			ns = data.lib,
 			near = near,
 			far = far,
 			warnings = {},
@@ -286,7 +286,7 @@ return function(ctx)
 		if not geometry or not self.record.area then
 			return nil
 		end
-		return self.ns.GetFlightInfoFromGeometry(geometry, self.record.area, self.record.speedModifier)
+		return self.lib.GetFlightInfoFromGeometry(geometry, self.record.area, self.record.speedModifier)
 	end
 
 	-- seconds the flight took longer (positive) or shorter (negative) than the simulation gives now, the time spent loading another map is left out
@@ -368,7 +368,7 @@ return function(ctx)
 			return lines
 		end
 		local data = self.data
-		local scale = self.ns.TAXI_SPEED_SCALE
+		local scale = self.lib.TAXI_SPEED_SCALE
 
 		-- flying further or shorter than the simulation is about how the taxi nodes are flown past
 		local yards = self.travelled - geometry.distance
@@ -473,7 +473,7 @@ return function(ctx)
 	---@return number
 	function Flight:roundSpeed(speed)
 		-- what makes the flight path mount fly faster (like Frequent Flier) is not part of the speeds of the sim file
-		return floor(speed / self.ns.TAXI_SPEED_SCALE / (self.record.speedModifier or 1) / 5 + 0.5) * 5
+		return floor(speed / self.lib.TAXI_SPEED_SCALE / (self.record.speedModifier or 1) / 5 + 0.5) * 5
 	end
 
 	-- Where the flight was ---------------------------------------------------------------------------------------------------
@@ -527,11 +527,11 @@ return function(ctx)
 	---@return FlightGeometry?
 	function Flight:geometry()
 		if self._geometry == nil then
-			local nodes = {} ---@type TaxiRouteNode[]
+			local nodes = {} ---@type TaxiTimerLib-1.0_TaxiRouteNode[]
 			for i, id in ipairs(self.record.route or {}) do
 				nodes[i] = { nodeID = id }
 			end
-			local geometry = self.ns.GetFlightGeometry(nodes)
+			local geometry = self.lib.GetFlightGeometry(nodes)
 			self._geometry = #geometry.points > 0 and geometry or false
 		end
 		return self._geometry or nil
@@ -546,7 +546,7 @@ return function(ctx)
 		if self._observed then
 			return self._observed.paths, self._observed.intervals
 		end
-		local ns = self.ns
+		local ns = self.lib
 		local paths, intervals = {}, {}
 		self._observed = { paths = paths, intervals = intervals }
 		local geometry = self:geometry()
@@ -560,7 +560,7 @@ return function(ctx)
 			for i = 1, #points - 1 do
 				intervals[numBefore + i] = { path = points[i].pathId, point = points[i].index, yards = lengths[i] or 0 }
 			end
-			local curve, starts = ns.CatmulPath(points)
+			local curve, starts = ns.CatmullPath(points)
 			if #curve >= 2 and #points >= 2 then
 				self:observeSegment(points, curve, starts, intervals, numBefore, paths)
 			end
@@ -570,8 +570,8 @@ return function(ctx)
 		return paths, intervals
 	end
 
-	---@param points TaxiPathNode[]
-	---@param curve Point[]
+	---@param points TaxiTimerLib-1.0_TaxiPathNode[]
+	---@param curve TaxiTimerLib-1.0_Point[]
 	---@param starts number[]
 	---@param intervals FlownStretch[]
 	---@param numBefore number

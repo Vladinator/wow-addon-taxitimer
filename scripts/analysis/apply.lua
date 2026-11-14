@@ -148,7 +148,7 @@ return function(ctx)
 			return 0
 		end
 		local joins = {} ---@type table<number, table<number, table<number, number[]>>>
-		for node, fromNodes in pairs(data.ns.NODE_JOINS or {}) do
+		for node, fromNodes in pairs(data.lib.sim.NODE_JOINS or {}) do
 			joins[node] = {}
 			for from, toNodes in pairs(fromNodes) do
 				joins[node][from] = {}

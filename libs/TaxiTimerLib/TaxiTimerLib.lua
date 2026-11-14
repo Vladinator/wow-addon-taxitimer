@@ -1,17 +1,17 @@
----@alias TaxiFlavor "mainline"|"forever"|"vanilla"|"classic"
+local MAJOR, MINOR = "TaxiTimerLib-1.0", 1
 
----@class TaxiAreaRamp
----@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
----@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
+---@class TaxiTimerLib-1.0
+local lib, minor = LibStub:NewLibrary(MAJOR, MINOR)
+if not lib then return end
 
----@class TaxiNodesStruct
+---@class TaxiTimerLib-1.0_TaxiNodesStruct
 
----@class TaxiPathStruct
+---@class TaxiTimerLib-1.0_TaxiPathStruct
 ---@field public ID 1
 ---@field public FROMTAXINODE 2
 ---@field public TOTAXINODE 3
 
----@class TaxiPathNodeStruct
+---@class TaxiTimerLib-1.0_TaxiPathNodeStruct
 ---@field public LOC_0 1
 ---@field public LOC_1 2
 ---@field public LOC_2 3
@@ -21,22 +21,291 @@
 ---@field public FLAGS 7
 ---@field public DELAY 8
 
----@class TaxiRouteNode A taxi node of a route, the nodes the game gives us have more than this.
+---@class TaxiTimerLib-1.0_TaxiRouteNode A taxi node of a route, the nodes the game gives us have more than this.
 ---@field public nodeID number
 ---@field public name? string
 
----@class TaxiPath
+---@class TaxiTimerLib-1.0_TaxiPath
 ---@field public id number
 ---@field public from number
 ---@field public to number
 
----@class TaxiPathNode : Point
+---@class TaxiTimerLib-1.0_Point
+---@field x number
+---@field y number
+---@field z number
+
+---@class TaxiTimerLib-1.0_TaxiPathNode : TaxiTimerLib-1.0_Point
 ---@field public pathId number The path id.
 ---@field public index number The node index in the path.
 ---@field public id number The node id.
 ---@field public map number The map the point is on.
 ---@field public flags number
 ---@field public delay number The seconds the flight waits at the point if it is flagged as a stop.
+
+---@class TaxiTimerLib-1.0_DB
+---@field public TAXINODES TaxiTimerLib-1.0_TaxiNodesStruct
+---@field public TAXIPATH TaxiTimerLib-1.0_TaxiPathStruct
+---@field public TAXIPATHNODE TaxiTimerLib-1.0_TaxiPathNodeStruct
+---@field public taxipath TaxiPathStructDB
+---@field public taxipathnode TaxiPathNodeStructDB
+
+---@class TaxiTimerLib-1.0_Sim
+
+--
+-- MARK: Database
+--
+
+-- The currently loaded database.
+lib.db = lib.db or nil ---@type TaxiTimerLib-1.0_DB
+
+---@deprecated For internal use only. This loads and updates lib references to the currently loaded database.
+---@param db TaxiTimerLib-1.0_DB
+function lib.SetDatabase(db)
+	assert(type(db) == "table" and type(db.TAXINODES) == "table" and type(db.TAXIPATH) == "table" and type(db.TAXIPATHNODE) == "table" and type(db.taxipath) == "table" and type(db.taxipathnode) == "table", 'TaxiTimerLib-1.0 "SetDatabase" expected a database table.')
+    lib.db = db
+end
+
+--
+-- MARK: Simulation
+--
+
+-- The currently loaded simulation.
+lib.sim = lib.sim or nil ---@type TaxiTimerLib-1.0_Sim
+
+---@deprecated For internal use only. This loads and updates lib references to the currently loaded simulation.
+---@param sim TaxiTimerLib-1.0_Sim
+function lib.SetSimulation(sim)
+	assert(type(sim) == "table" and type(sim.FLAVOR) == "string", 'TaxiTimerLib-1.0 "SetSimulation" expected a simulation table.')
+    lib.sim = sim
+end
+
+--
+-- MARK: Catmull–Rom
+--
+
+local function pow(base, exponent)
+	return base ^ exponent
+end
+
+local C_AMOUNT_OF_POINTS = 10
+local C_ALPHA = 0.5
+
+---@param t number
+---@param p0 TaxiTimerLib-1.0_Point
+---@param p1 TaxiTimerLib-1.0_Point
+local function GetT(t, p0, p1)
+	local a = pow(p1.x - p0.x, 2) + pow(p1.y - p0.y, 2) + pow(p1.z - p0.z, 2)
+	local b = pow(a, 0.5)
+	local c = pow(b, C_ALPHA)
+	return t + c
+end
+
+---@param p0 TaxiTimerLib-1.0_Point
+---@param p1 TaxiTimerLib-1.0_Point
+local function IsSamePoint(p0, p1)
+	return p0.x == p1.x and p0.y == p1.y and p0.z == p1.z
+end
+
+-- Returns the point mirrored across `p1` from `p2`, used as the missing neighbor at either end of a path.
+---@param p1 TaxiTimerLib-1.0_Point
+---@param p2 TaxiTimerLib-1.0_Point
+---@return TaxiTimerLib-1.0_Point
+local function GetMirroredPoint(p1, p2)
+	return { x = 2 * p1.x - p2.x, y = 2 * p1.y - p2.y, z = 2 * p1.z - p2.z }
+end
+
+-- Returns the points on the curve from `p1` up to (not including) `p2`. The points `p0` and `p3` are the neighbors that shape the curve.
+---@param p0 TaxiTimerLib-1.0_Point
+---@param p1 TaxiTimerLib-1.0_Point
+---@param p2 TaxiTimerLib-1.0_Point
+---@param p3 TaxiTimerLib-1.0_Point
+---@return TaxiTimerLib-1.0_Point[]? points, number count
+local function GetCatmullPoints(p0, p1, p2, p3)
+	local t0 = 0
+	local t1 = GetT(t0, p0, p1)
+	local t2 = GetT(t1, p1, p2)
+	local t3 = GetT(t2, p2, p3)
+
+	-- two neighbors sharing the same position would divide by zero below
+	if t1 == t0 or t2 == t1 or t3 == t2 then
+		return nil, 0
+	end
+
+	local numNewPoints = 0
+	local newPoints = {} ---@type TaxiTimerLib-1.0_Point[]
+
+	local t1mt0 = t1 - t0
+	local t2mt1 = t2 - t1
+	local t3mt2 = t3 - t2
+	local t2mt0 = t2 - t0
+	local t3mt1 = t3 - t1
+
+	-- the last point (p2) is left out as it is the first point of the next curve
+	for i = 0, C_AMOUNT_OF_POINTS - 2 do
+		local t = t1 + t2mt1 * i / (C_AMOUNT_OF_POINTS - 1)
+		local t1mt = t1 - t
+		local tmt0 = t - t0
+		local t2mt = t2 - t
+		local tmt1 = t - t1
+		local t3mt = t3 - t
+		local tmt2 = t - t2
+
+		local a1l, a1r = t1mt/t1mt0, tmt0/t1mt0
+		local a2l, a2r = t2mt/t2mt1, tmt1/t2mt1
+		local a3l, a3r = t3mt/t3mt2, tmt2/t3mt2
+		local b1l, b1r = t2mt/t2mt0, tmt0/t2mt0
+		local b2l, b2r = t3mt/t3mt1, tmt1/t3mt1
+		local cl, cr = a2l, a2r
+
+		local A1x, A1y, A1z = a1l * p0.x + a1r * p1.x, a1l * p0.y + a1r * p1.y, a1l * p0.z + a1r * p1.z
+		local A2x, A2y, A2z = a2l * p1.x + a2r * p2.x, a2l * p1.y + a2r * p2.y, a2l * p1.z + a2r * p2.z
+		local A3x, A3y, A3z = a3l * p2.x + a3r * p3.x, a3l * p2.y + a3r * p3.y, a3l * p2.z + a3r * p3.z
+
+		local B1x, B1y, B1z = b1l * A1x + b1r * A2x, b1l * A1y + b1r * A2y, b1l * A1z + b1r * A2z
+		local B2x, B2y, B2z = b2l * A2x + b2r * A3x, b2l * A2y + b2r * A3y, b2l * A2z + b2r * A3z
+
+		numNewPoints = numNewPoints + 1
+		newPoints[numNewPoints] = { x = cl * B1x + cr * B2x, y = cl * B1y + cr * B2y, z = cl * B1z + cr * B2z }
+	end
+
+	return newPoints, numNewPoints
+end
+
+---@param p0 TaxiTimerLib-1.0_Point
+---@param p1 TaxiTimerLib-1.0_Point
+---@return number yards
+local function GetDistance(p0, p1)
+	return pow(pow(p1.x - p0.x, 2) + pow(p1.y - p0.y, 2) + pow(p1.z - p0.z, 2), 0.5)
+end
+
+---@param path TaxiTimerLib-1.0_Point[]
+---@param ignoreHeight? boolean `true` to measure the distance as seen from above (the height of the points is ignored)
+---@return number yards, number[] intervals The yards flown between each point and the next, `intervals[i]` is from `path[i]` to `path[i + 1]`.
+function lib.CatmullDistance(path, ignoreHeight)
+	local intervals = {} ---@type number[]
+	local numPoints = 0
+	local points = {} ---@type TaxiTimerLib-1.0_Point[]
+	local origins = {} ---@type number[] the index in `path` of each of the `points`
+
+	-- a point sharing the position of the point before it adds no distance and would break the curve math
+	for i = 1, #path do
+		local point = path[i]
+
+		if ignoreHeight then
+			point = { x = point.x, y = point.y, z = 0 }
+		end
+
+		if i > 1 then
+			intervals[i - 1] = 0
+		end
+
+		if numPoints == 0 or not IsSamePoint(points[numPoints], point) then
+			numPoints = numPoints + 1
+			points[numPoints] = point
+			origins[numPoints] = i
+		end
+	end
+
+	local distance = 0
+
+	for i = 1, numPoints - 1 do
+		local p1 = points[i]
+		local p2 = points[i + 1]
+		local p0 = points[i - 1] or GetMirroredPoint(p1, p2)
+		local p3 = points[i + 2] or GetMirroredPoint(p2, p1)
+		local newPoints, numNewPoints = GetCatmullPoints(p0, p1, p2, p3)
+		local interval = 0
+		local previous = p1
+
+		-- without a curve the straight line to the next point is used
+		if newPoints then
+			for j = 1, numNewPoints do
+				interval = interval + GetDistance(previous, newPoints[j])
+				previous = newPoints[j]
+			end
+		end
+
+		interval = interval + GetDistance(previous, p2)
+		intervals[origins[i + 1] - 1] = interval
+		distance = distance + interval
+	end
+
+	return distance, intervals
+end
+
+--- Returns the points of the curve through `path`, and where each point of the path is among them.
+--- A point sharing the position of the point before it is where that point is.
+---@param path TaxiTimerLib-1.0_Point[]
+---@param ignoreHeight? boolean `true` to leave out the height of the points
+---@return TaxiTimerLib-1.0_Point[] curve, number[] starts `starts[i]` is the index in `curve` of `path[i]`. What is flown from `path[i]` to `path[i + 1]` are the points from `starts[i]` up to `starts[i + 1]`.
+function lib.CatmullPath(path, ignoreHeight)
+	local curve = {} ---@type TaxiTimerLib-1.0_Point[]
+	local starts = {} ---@type number[]
+	local numCurve = 0
+	local numPoints = 0
+	local points = {} ---@type TaxiTimerLib-1.0_Point[]
+	local origins = {} ---@type number[]
+
+	for i = 1, #path do
+		local point = path[i]
+
+		if ignoreHeight then
+			point = { x = point.x, y = point.y, z = 0 }
+		end
+
+		if numPoints == 0 or not IsSamePoint(points[numPoints], point) then
+			numPoints = numPoints + 1
+			points[numPoints] = point
+			origins[numPoints] = i
+		end
+	end
+
+	for i = 1, numPoints - 1 do
+		local p1 = points[i]
+		local p2 = points[i + 1]
+		local p0 = points[i - 1] or GetMirroredPoint(p1, p2)
+		local p3 = points[i + 2] or GetMirroredPoint(p2, p1)
+		local newPoints, numNewPoints = GetCatmullPoints(p0, p1, p2, p3)
+
+		starts[origins[i]] = numCurve + 1
+
+		if newPoints then
+			for j = 1, numNewPoints do
+				numCurve = numCurve + 1
+				curve[numCurve] = newPoints[j]
+			end
+		else
+			-- without a curve the straight line to the next point is used
+			numCurve = numCurve + 1
+			curve[numCurve] = p1
+		end
+	end
+
+	if numPoints > 0 then
+		numCurve = numCurve + 1
+		curve[numCurve] = points[numPoints]
+		starts[origins[numPoints]] = numCurve
+	end
+
+	for i = 1, #path do
+		if not starts[i] then
+			starts[i] = starts[i - 1] or 1
+		end
+	end
+
+	return curve, starts
+end
+
+--
+-- MARK: Taxi Flight
+--
+
+---@alias TaxiTimerLib-1.0_TaxiFlavor "mainline"|"forever"|"vanilla"|"classic"
+
+---@class TaxiTimerLib-1.0_TaxiAreaRamp
+---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
+---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
 
 -- A row of `ns.taxipath` where the columns are indexed using `ns.TAXIPATH`.
 ---@alias TaxiPathRow { [1]: number, [2]: number, [3]: number }
@@ -50,22 +319,10 @@
 -- The rows of `ns.taxipathnode` split up into chunks, sorted by path and in flight order within each path.
 ---@alias TaxiPathNodeStructDB table<number, TaxiPathNodeRow[]>
 
----@class taxi_ns_db
----@field public TAXINODES TaxiNodesStruct
----@field public TAXIPATH TaxiPathStruct
----@field public TAXIPATHNODE TaxiPathNodeStruct
----@field public taxipath TaxiPathStructDB
----@field public taxipathnode TaxiPathNodeStructDB
-
-local ns = select(2, ...) ---@class taxi_ns_db
-
-ns = ns or {}
-
-local CatmulDistance = ns.CatmulDistance
-local TAXIPATH = ns.TAXIPATH
-local TAXIPATHNODE = ns.TAXIPATHNODE
-local TaxiPath = ns.taxipath
-local TaxiPathNode = ns.taxipathnode
+local TAXIPATH = lib.db.TAXIPATH
+local TAXIPATHNODE = lib.db.TAXIPATHNODE
+local TaxiPath = lib.db.taxipath
+local TaxiPathNode = lib.db.taxipathnode
 
 --
 -- Taxi
@@ -74,14 +331,20 @@ local TaxiPathNode = ns.taxipathnode
 -- The speeds that come with the `sim_` file of the game are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
 local TAXI_SPEED_SCALE = (40 + 1/3) / 40
 
+-- The speeds that come with the `sim_` file of the game are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
+lib.TAXI_SPEED_SCALE = TAXI_SPEED_SCALE
+
 -- The speed of the taxi maps the `sim_` file of the game does not have another speed for.
 local TAXI_SPEED_FALLBACK = 30+1/3
+
+-- The speed of the taxi maps the `sim_` file of the game does not have another speed for.
+lib.TAXI_SPEED_FALLBACK = TAXI_SPEED_FALLBACK
 
 --- Returns the speed the taxi map is flown at.
 ---@param areaID? number
 ---@return number
-local function Speed(areaID)
-	local areaSpeeds = ns.AREA_SPEEDS
+function lib.Speed(areaID)
+	local areaSpeeds = lib.sim.AREA_SPEEDS
 	local speed = areaID and areaSpeeds and areaSpeeds[areaID]
 
 	if speed then
@@ -110,7 +373,7 @@ local RETRACE_REACH = 250 -- yards (seen from above) the stretch must reach away
 local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongside the other before that stretch is skipped, fewer are left to the skip distance above
 
 ---@class TaxiPathSegment
----@field public points TaxiPathNode[]
+---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
 ---@field public distance? number The yards flown.
 ---@field public distance2D? number The yards flown as seen from above.
 ---@field public speed? number The average speed in yards per second.
@@ -119,7 +382,7 @@ local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongs
 local hasLookup = false
 local pathLookup = {} ---@type table<number, table<number, number>> `[from][to] = pathId`
 local pathRows = {} ---@type table<number, TaxiPathNodeRow[]> `[pathId] = rows` in flight order
-local pathNodes = {} ---@type table<number, TaxiPathNode[]|false>
+local pathNodes = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNode[]|false>
 
 -- the db is only walked once, the first time we need a path
 local function BuildLookup()
@@ -130,7 +393,7 @@ local function BuildLookup()
 
 		for j = 1, #taxiPathChunk do
 			local taxiPath = taxiPathChunk[j]
-			local fromId = taxiPath[TAXIPATH.FROMTAXINODE]
+			local fromId = taxiPath[lib.db.TAXIPATH.FROMTAXINODE]
 			local toId = taxiPath[TAXIPATH.TOTAXINODE]
 			local destinations = pathLookup[fromId]
 
@@ -165,7 +428,7 @@ local function BuildLookup()
 end
 
 ---@param pathId number
----@return TaxiPathNode[]? nodes
+---@return TaxiTimerLib-1.0_TaxiPathNode[]? nodes
 local function GetTaxiPathNodes(pathId)
 	local nodes = pathNodes[pathId]
 
@@ -205,7 +468,7 @@ end
 
 ---@param from number
 ---@param to number
----@return TaxiPathNode[]? nodes
+---@return TaxiTimerLib-1.0_TaxiPathNode[]? nodes
 local function GetTaxiPath(from, to)
 	if not hasLookup then
 		BuildLookup()
@@ -314,19 +577,19 @@ local function GetTaxiBridge(from, to)
 	return trip or nil
 end
 
----@param node TaxiPathNode
+---@param node TaxiTimerLib-1.0_TaxiPathNode
 local function IsTeleport(node)
 	return HasFlag(node.flags, TAXI_PATH_NODE_FLAG_TELEPORT)
 end
 
----@param node TaxiPathNode
+---@param node TaxiTimerLib-1.0_TaxiPathNode
 local function IsStop(node)
 	return node.delay > 0 and HasFlag(node.flags, TAXI_PATH_NODE_FLAG_STOP)
 end
 
 -- Checks if `node` is far enough away from `edge` to be flown when the taxi node at `edge` is passed without landing.
----@param edge TaxiPathNode
----@param node TaxiPathNode
+---@param edge TaxiTimerLib-1.0_TaxiPathNode
+---@param node TaxiTimerLib-1.0_TaxiPathNode
 local function IsFarFromEdge(edge, node)
 	if edge.map ~= node.map then
 		return true
@@ -343,8 +606,8 @@ local function IsFarFromEdge(edge, node)
 end
 
 --- Checks if `node` is close to any of the points of the path `nodes`, height included.
----@param node TaxiPathNode
----@param nodes TaxiPathNode[]
+---@param node TaxiTimerLib-1.0_TaxiPathNode
+---@param nodes TaxiTimerLib-1.0_TaxiPathNode[]
 local function IsNearPath(node, nodes)
 	if IsTeleport(node) or IsStop(node) then
 		return false
@@ -369,8 +632,8 @@ end
 
 --- Returns the last point flown of the path arriving at a taxi node and the first point flown of the path leaving it, if the two paths run alongside each other at the node.
 --- Where the way out of a taxi node goes back along the way in (like Ironforge between Kharanos and Menethil Harbor) the game does not fly in and back out, it flies from where the paths come together to where they part again.
----@param arriving TaxiPathNode[]
----@param leaving TaxiPathNode[]
+---@param arriving TaxiTimerLib-1.0_TaxiPathNode[]
+---@param leaving TaxiTimerLib-1.0_TaxiPathNode[]
 ---@return number? last, number? first
 local function GetRetrace(arriving, leaving)
 	local numArriving = #arriving
@@ -405,20 +668,20 @@ end
 
 -- Joins the paths of a route into the points that are flown.
 -- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
----@param paths TaxiPathNode[][]
+---@param paths TaxiTimerLib-1.0_TaxiPathNode[][]
 ---@param nodeIds number[] The taxi node each path ends at, which is where the next path begins.
 ---@param fromIds number[] The taxi node each path begins at.
----@return TaxiPathNode[] points
+---@return TaxiTimerLib-1.0_TaxiPathNode[] points
 local function JoinTaxiPaths(paths, nodeIds, fromIds)
-	local points = {} ---@type TaxiPathNode[]
+	local points = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[]
 	local numPoints = 0
 	local numPaths = #paths
 	local firstFlown = {} ---@type table<number, number> `[pathIndex] = index` of the first point of the path that is flown, if not all of it is
 	local lastFlown = {} ---@type table<number, number> `[pathIndex] = index` of the last point of the path that is flown, if not all of it is
 
-	local exceptions = ns.RETRACE_EXCEPTIONS
+	local exceptions = lib.sim.RETRACE_EXCEPTIONS
 
-	for pathIndex = 1, ns.SKIP_RETRACED and numPaths - 1 or 0 do
+	for pathIndex = 1, lib.sim.SKIP_RETRACED and numPaths - 1 or 0 do
 		-- the game flies into some taxi nodes and back out whole, however much the two paths run alongside each other
 		local last, first
 		if not (exceptions and exceptions[nodeIds[pathIndex]]) then
@@ -432,7 +695,7 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	end
 
 	-- the joins that were seen to be flown another way than the rules above give
-	local nodeJoins = ns.NODE_JOINS
+	local nodeJoins = lib.sim.NODE_JOINS
 
 	for pathIndex = 1, nodeJoins and numPaths - 1 or 0 do
 		local joins = nodeJoins[nodeIds[pathIndex]]
@@ -477,10 +740,10 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	return points
 end
 
----@param nodes TaxiRouteNode[]
----@return TaxiPathNode[] points, TaxiPathSegment[] segments, number delay
-local function GetPointsFromNodes(nodes)
-	local paths = {} ---@type TaxiPathNode[][]
+---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[]
+---@return TaxiTimerLib-1.0_TaxiPathNode[] points, TaxiPathSegment[] segments, number delay
+function lib.GetPointsFromNodes(nodes)
+	local paths = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[][]
 	local nodeIds = {} ---@type number[]
 	local fromIds = {} ---@type number[]
 
@@ -534,10 +797,10 @@ local function GetPointsFromNodes(nodes)
 end
 
 -- Returns the speed a path is flown at from the given point, if the path has its own speeds.
----@param point TaxiPathNode
+---@param point TaxiTimerLib-1.0_TaxiPathNode
 ---@return number? speed
 local function GetPathSpeed(point)
-	local pathSpeeds = ns.PATH_SPEEDS
+	local pathSpeeds = lib.sim.PATH_SPEEDS
 	local speeds = pathSpeeds and pathSpeeds[point.pathId]
 
 	if not speeds then
@@ -555,13 +818,13 @@ local function GetPathSpeed(point)
 end
 
 -- Returns the speed flown from each of the points to the next.
----@param points TaxiPathNode[]
+---@param points TaxiTimerLib-1.0_TaxiPathNode[]
 ---@param areaID? number
 ---@return (number|false)[] speeds, boolean isDynamic `true` if the speed changes during the flight. The speed is `false` for the points that leave it to the taxi map.
 local function GetPointSpeeds(points, areaID)
 	local speeds = {} ---@type (number|false)[]
 	local numPoints = #points
-	local areaRamps = ns.AREA_RAMPS
+	local areaRamps = lib.sim.AREA_RAMPS
 	local ramp = areaID and areaRamps and areaRamps[areaID]
 	local isDynamic = false
 
@@ -571,7 +834,7 @@ local function GetPointSpeeds(points, areaID)
 		-- a speed that was set carries on into the next path, the game does not change it as a path begins
 		local previous = points[i - 1]
 
-		if not speed and ns.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
+		if not speed and lib.sim.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
 			speed = speeds[i - 1] or nil
 		end
 
@@ -599,7 +862,7 @@ end
 ---@param yards number
 ---@return number? speed
 local function GetSpacingSpeed(areaID, yards)
-	local areaSpacing = ns.AREA_SPACING
+	local areaSpacing = lib.sim.AREA_SPACING
 	local spacing = areaID and areaSpacing and areaSpacing[areaID]
 
 	if not spacing then
@@ -626,8 +889,8 @@ end
 ---@field public durationLeft number The seconds left of the flight after it.
 
 ---@class FlightGeometry The points a flight goes through and how far it is between them, which does not depend on how fast it is flown.
----@field public nodes TaxiRouteNode[]
----@field public points TaxiPathNode[]
+---@field public nodes TaxiTimerLib-1.0_TaxiRouteNode[]
+---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
 ---@field public segments TaxiPathSegment[]
 ---@field public delay number The seconds the paths say the flight waits at stops along the way.
 ---@field public maps table<number, boolean> The maps the points are on.
@@ -641,8 +904,8 @@ end
 ---@field public duration number The estimated seconds the flight takes.
 ---@field public delay number The seconds the paths say the flight waits at stops along the way.
 ---@field public delayIncluded boolean If the `delay` is part of the `duration`.
----@field public nodes TaxiRouteNode[]
----@field public points TaxiPathNode[]
+---@field public nodes TaxiTimerLib-1.0_TaxiRouteNode[]
+---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
 ---@field public segments TaxiPathSegment[]
 ---@field public steps FlightStep[] The stretches between the points in the order they are flown.
 ---@field public maps table<number, boolean> The maps the points are on.
@@ -654,10 +917,10 @@ end
 local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
 
 --- Returns the points a flight goes through and how far it is between them.
----@param nodes TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
+---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@return FlightGeometry
-local function GetFlightGeometry(nodes)
-	local points, segments, delay = GetPointsFromNodes(nodes)
+function lib.GetFlightGeometry(nodes)
+	local points, segments, delay = lib.GetPointsFromNodes(nodes)
 	local maps = {} ---@type table<number, boolean>
 	local distance = 0
 	local distance2D = 0
@@ -668,8 +931,8 @@ local function GetFlightGeometry(nodes)
 
 	for i = 1, #segments do
 		local segment = segments[i]
-		local segmentDistance, intervals = CatmulDistance(segment.points)
-		local segmentDistance2D = CatmulDistance(segment.points, true)
+		local segmentDistance, intervals = lib.CatmullDistance(segment.points)
+		local segmentDistance2D = lib.CatmullDistance(segment.points, true)
 		segment.distance, segment.distance2D, segment.intervals = segmentDistance, segmentDistance2D, intervals
 		distance = distance + segmentDistance
 		distance2D = distance2D + segmentDistance2D
@@ -691,13 +954,13 @@ end
 ---@param areaID? number
 ---@param speedModifier? number What the speeds are multiplied by for something that makes the flight path mount fly faster or slower (1.2 for 20% faster), the game side knows what that is.
 ---@return FlightInfo?
-local function GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
+function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	local modifier = speedModifier and speedModifier > 0 and speedModifier or 1
-	local areaSpeed = Speed(areaID)
+	local areaSpeed = lib.Speed(areaID)
 	local speeds, isDynamic = GetPointSpeeds(geometry.points, areaID)
 
 	-- some taxi nodes have a mount that flies faster or slower than the others of the taxi map, the whole flight is flown on the mount of the node it starts at
-	local nodeSpeeds = ns.NODE_SPEEDS
+	local nodeSpeeds = lib.sim.NODE_SPEEDS
 	local firstNode = geometry.nodes[1]
 	local nodeSpeed = firstNode and nodeSpeeds and nodeSpeeds[firstNode.nodeID]
 
@@ -758,7 +1021,7 @@ local function GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	end
 
 	if geometry.distance > 0 and duration > 0 then
-		local fixedTime = ns.AREA_FIXED_TIME
+		local fixedTime = lib.sim.AREA_FIXED_TIME
 
 		---@type FlightInfo
 		local info = {
@@ -789,19 +1052,19 @@ local function GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 end
 
 --- Returns what the flight along the taxi nodes is estimated to be like.
----@param nodes TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
+---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@param areaID? number
 ---@param speedModifier? number See `GetFlightInfoFromGeometry`.
 ---@return FlightInfo?
-local function GetFlightInfoFromNodes(nodes, areaID, speedModifier)
-	return GetFlightInfoFromGeometry(GetFlightGeometry(nodes), areaID, speedModifier)
+function lib.GetFlightInfoFromNodes(nodes, areaID, speedModifier)
+	return lib.GetFlightInfoFromGeometry(lib.GetFlightGeometry(nodes), areaID, speedModifier)
 end
 
 -- Returns the seconds left of the flight when the given yards are left of it, going by the speed of each stretch.
 ---@param info FlightInfo
 ---@param distance number
 ---@return number seconds
-local function GetFlightTimeLeft(info, distance)
+function lib.GetFlightTimeLeft(info, distance)
 	local steps = info.steps
 
 	for i = 1, #steps do
@@ -814,20 +1077,3 @@ local function GetFlightTimeLeft(info, distance)
 
 	return 0
 end
-
---
--- Exports
---
-
--- The speeds that come with the `sim_` file of the game are the round numbers the game appears to use, what is flown is slightly faster (40 is flown at 40.33).
-ns.TAXI_SPEED_SCALE = TAXI_SPEED_SCALE
-
--- The speed of the taxi maps the `sim_` file of the game does not have another speed for.
-ns.TAXI_SPEED_FALLBACK = TAXI_SPEED_FALLBACK
-
-ns.Speed = Speed
-ns.GetPointsFromNodes = GetPointsFromNodes
-ns.GetFlightGeometry = GetFlightGeometry
-ns.GetFlightInfoFromGeometry = GetFlightInfoFromGeometry
-ns.GetFlightInfoFromNodes = GetFlightInfoFromNodes
-ns.GetFlightTimeLeft = GetFlightTimeLeft
