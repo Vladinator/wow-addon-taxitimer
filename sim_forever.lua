@@ -16,6 +16,16 @@ ns.SKIP_RETRACED = false
 ns.AREA_SPEEDS = {
 }
 
+-- Taxi nodes where the game flies into the node and back out when passing through it, whole paths, however much the paths in and out run alongside each other (see `SKIP_RETRACED`).
+ns.RETRACE_EXCEPTIONS = {
+}
+
+-- How the game flies past a taxi node where it was seen to do it another way than the rules of the simulation give.
+-- `[node] = { [from] = { [to] = { last, first } } }` when flying from the taxi node `from` past `node` to the taxi node `to`:
+-- `last` is the last point that is flown of the path arriving at `node`, and `first` the first point that is flown of the path leaving it.
+ns.NODE_JOINS = {
+}
+
 -- Taxi nodes whose mount flies at another speed than the others of the taxi map. The whole flight is flown at that speed when it starts at the node, also the hops after the first.
 -- Paths in `PATH_SPEEDS` and the speeds of `AREA_RAMPS` and `AREA_SPACING` still have their own speeds.
 ns.NODE_SPEEDS = {

@@ -313,20 +313,42 @@ end
 -- Joins the paths of a route into the points that are flown.
 -- When flying past a taxi node the game doesn't land, it skips the points near where the path arriving at the node ends and where the path leaving the node begins.
 ---@param paths TaxiPathNode[][]
+---@param nodeIds number[] The taxi node each path ends at, which is where the next path begins.
+---@param fromIds number[] The taxi node each path begins at.
 ---@return TaxiPathNode[] points
-local function JoinTaxiPaths(paths)
+local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	local points = {} ---@type TaxiPathNode[]
 	local numPoints = 0
 	local numPaths = #paths
 	local firstFlown = {} ---@type table<number, number> `[pathIndex] = index` of the first point of the path that is flown, if not all of it is
 	local lastFlown = {} ---@type table<number, number> `[pathIndex] = index` of the last point of the path that is flown, if not all of it is
 
+	local exceptions = ns.RETRACE_EXCEPTIONS
+
 	for pathIndex = 1, ns.SKIP_RETRACED and numPaths - 1 or 0 do
-		local last, first = GetRetrace(paths[pathIndex], paths[pathIndex + 1])
+		-- the game flies into some taxi nodes and back out whole, however much the two paths run alongside each other
+		local last, first
+		if not (exceptions and exceptions[nodeIds[pathIndex]]) then
+			last, first = GetRetrace(paths[pathIndex], paths[pathIndex + 1])
+		end
 
 		if last and first then
 			lastFlown[pathIndex] = last
 			firstFlown[pathIndex + 1] = first
+		end
+	end
+
+	-- the joins that were seen to be flown another way than the rules above give
+	local nodeJoins = ns.NODE_JOINS
+
+	for pathIndex = 1, nodeJoins and numPaths - 1 or 0 do
+		local joins = nodeJoins[nodeIds[pathIndex]]
+		local join = joins and joins[fromIds[pathIndex]]
+		join = join and join[nodeIds[pathIndex + 1]]
+
+		if join then
+			lastFlown[pathIndex] = join[1]
+			firstFlown[pathIndex + 1] = join[2]
 		end
 	end
 
@@ -366,6 +388,8 @@ end
 ---@return TaxiPathNode[] points, TaxiPathSegment[] segments, number delay
 local function GetPointsFromNodes(nodes)
 	local paths = {} ---@type TaxiPathNode[][]
+	local nodeIds = {} ---@type number[]
+	local fromIds = {} ---@type number[]
 
 	for i = 2, #nodes do
 		local from, to = nodes[i - 1], nodes[i]
@@ -373,10 +397,12 @@ local function GetPointsFromNodes(nodes)
 
 		if path and path[1] then
 			paths[#paths + 1] = path
+			nodeIds[#paths] = to.nodeID
+			fromIds[#paths] = from.nodeID
 		end
 	end
 
-	local points = JoinTaxiPaths(paths)
+	local points = JoinTaxiPaths(paths, nodeIds, fromIds)
 	local segments = {} ---@type TaxiPathSegment[]
 	local segment ---@type TaxiPathSegment?
 	local delay = 0
