@@ -55,7 +55,7 @@ local SV do
 	---@param tbl T
 	---@param value T[keyof T]
 	local function TableContains(tbl, value)
-		for k, v in pairs(tbl) do
+		for _, v in pairs(tbl) do
 			if v == value then
 				return true
 			end
@@ -219,17 +219,23 @@ local Visualization do
 	local flashAnim ---@type AnimationGroup
 	local flashToken = 0 -- tells the hiding that waits for the flash if it is still the one that should happen
 	local done ---@type Texture What is flown of the route up to the last taxi node we passed.
+	local cut ---@type Texture What is left of the bar after the taxi node we land at when we ask to stop, it is not flown.
+	local stopMarker ---@type Texture Where that is.
+	local stopAt ---@type number? The seconds of the flight at which we land after asking to stop.
+	local STOP_COLOR = { 1, 0.82, 0 } -- the yellow of the stop text in the tooltip of the notches
 	local notches = {} ---@type VisualizationNotch[]
 
 	local flight ---@type TaxiTimerLib-1.0_FlightInfo?
 	local checkpoints ---@type TaxiTimerLib-1.0_FlightCheckpoint[]?
 	local endTime ---@type number? `GetTime()` when the time left runs out.
-	local startTime ---@type number? `GetTime()` when the flight was first seen going.
+	local startTime ---@type number? `GetTime()` when the flight began, which is when the clock notch starts too.
+	local positioned = false -- if we know where we are in the flight yet, which is only after the first two ticks of the GPS
 	local elapsed = 0 -- seconds of the flight that were flown according to the simulation
 	local elapsedAt = 0 -- `GetTime()` when `elapsed` was set
 	local hovered ---@type VisualizationNotch? The notch the tooltip is shown for.
 	local hoveredAt = 0 -- `GetTime()` when the tooltip was made
 	local shown = 0 -- seconds of the flight the bar is filled up to, which runs on between the times we get to know where we are
+	local INTERPOLATION = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut -- the smoothing of the status bar, nothing on a client without it
 
 	local activeMode ---@type VisualizationMode? The mode the flight that is going on (or the last one) began with.
 
@@ -351,15 +357,59 @@ local Visualization do
 		SV:SetOption("bar", { point, relativePoint, x, y })
 	end
 
+	local clickable = false -- if the bar takes clicks, which is only while shift is held so it can be dragged, otherwise clicks go through it to what is behind
+
+	-- Keeps the tooltips working, but disables intercepting the clicks.
+	---@param region Frame
+	local function ApplyClickable(region)
+		region:SetMouseMotionEnabled(true)
+		region:SetMouseClickEnabled(clickable)
+	end
+
+	-- Updates the click-state unless shift is held down, or the user is already dragging the frame.
+	local function UpdateClickable()
+		local shift = IsShiftKeyDown() or drag ~= nil
+		if shift == clickable or not frame then
+			return
+		end
+		clickable = shift
+		ApplyClickable(frame)
+		if clockNotch then
+			ApplyClickable(clockNotch)
+		end
+		for i = 1, #notches do
+			ApplyClickable(notches[i])
+		end
+	end
+
+	---@param parent Frame The bar, which is not in `frame` yet as the first notch is made while the frame is being created.
+	---@param onEnter fun(self: VisualizationNotch) The tooltip of the notch.
+	---@param level number
+	local function CreateNotch(parent, onEnter, level)
+		local notch = CreateFrame("Frame", nil, parent) ---@class VisualizationNotch
+		notch:SetSize(10, BAR_HEIGHT + 1)
+		notch:SetFrameLevel(level)
+		notch:SetScript("OnEnter", onEnter)
+		notch:SetScript("OnLeave", NotchOnLeave)
+		notch:RegisterForDrag("LeftButton")
+		notch:SetScript("OnDragStart", DragStart)
+		notch:SetScript("OnDragStop", DragStop)
+		notch:EnableMouse(true)
+		ApplyClickable(notch) -- last, as setting the drag up can turn the clicks back on
+		notch:Hide()
+		return notch
+	end
+
 	local function CreateFrames()
 		local f = CreateFrame("Frame", format("%sFrame", addonName), UIParent) ---@class VisualizationFrame : Frame
 		f:SetSize(BAR_WIDTH, BAR_HEIGHT)
 		f:SetFrameStrata("MEDIUM")
 		f:SetClampedToScreen(true)
-		f:EnableMouse(true)
 		f:RegisterForDrag("LeftButton")
 		f:SetScript("OnDragStart", DragStart)
 		f:SetScript("OnDragStop", DragStop)
+		f:EnableMouse(true)
+		ApplyClickable(f) -- last, as setting the drag up can turn the clicks back on
 
 		useAtlas = HasAtlases()
 
@@ -460,13 +510,7 @@ local Visualization do
 		delta:SetTextColor(1, 0.25, 0.25)
 
 		-- where the simulation says we are when the flight is going by the clock alone, to compare with where we are going by our position
-		clockNotch = CreateFrame("Frame", nil, f) ---@class VisualizationNotch
-		clockNotch:SetSize(10, BAR_HEIGHT + 1)
-		clockNotch:SetFrameLevel(overlay:GetFrameLevel() + 6)
-		clockNotch:EnableMouse(true)
-		clockNotch:SetScript("OnEnter", ClockOnEnter)
-		clockNotch:SetScript("OnLeave", NotchOnLeave)
-		clockNotch:Hide()
+		clockNotch = CreateNotch(f, ClockOnEnter, overlay:GetFrameLevel() + 6)
 		local clockNotchLine = clockNotch:CreateTexture(nil, "OVERLAY")
 		if useAtlas then
 			clockNotchLine:SetAtlas(ATLAS.pip, true)
@@ -476,6 +520,21 @@ local Visualization do
 		end
 		clockNotchLine:SetPoint("CENTER")
 		clockNotch.line = clockNotchLine
+
+		-- asking to stop lands us at the next taxi node, so the rest of the bar is dimmed and a marker is where we land
+		cut = overlay:CreateTexture(nil, "ARTWORK", nil, -1)
+		cut:SetTexture(WHITE_TEXTURE)
+		cut:SetVertexColor(0, 0, 0, 0.6)
+		cut:Hide()
+		stopMarker = overlay:CreateTexture(nil, "OVERLAY", nil, 3)
+		if useAtlas then
+			stopMarker:SetAtlas(ATLAS.pip, true)
+		else
+			stopMarker:SetTexture(WHITE_TEXTURE)
+			stopMarker:SetSize(2, BAR_HEIGHT)
+		end
+		stopMarker:SetVertexColor(STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3], 1)
+		stopMarker:Hide()
 
 		-- what is flown of the route up to the last taxi node we passed, cut off where that is the way the experience bar cuts off what it predicts
 		done = fill:CreateTexture(nil, "ARTWORK", nil, 1)
@@ -492,6 +551,7 @@ local Visualization do
 		done:Hide()
 
 		f:SetScript("OnUpdate", function()
+			UpdateClickable()
 			DragUpdate()
 			Visualization:Refresh()
 		end)
@@ -533,6 +593,28 @@ local Visualization do
 		return mode == "bar" or mode == "details"
 	end
 
+	-- Takes back the dimmed end of the bar and the marker of the stop.
+	local function ClearStop()
+		stopAt = nil
+		if cut then
+			cut:Hide()
+			stopMarker:Hide()
+		end
+		for i = 1, #notches do
+			notches[i].line:SetAlpha(1)
+		end
+	end
+
+	-- Empties the bar at once, without the easing of the status bar (it would slide down from where the last flight ended).
+	local function ResetFill()
+		fill:SetValue(0)
+		if fill.SetToTargetValue then
+			fill:SetToTargetValue()
+		end
+	end
+
+	local STOP_GRACE = 3 -- seconds past the stop we can be, the simulation being off by a bit, before we know it was missed
+
 	-- Lays out the bar for the flight we have.
 	function Visualization:Build()
 		local info = flight
@@ -562,9 +644,13 @@ local Visualization do
 		end
 
 		done:Hide()
+		stopAt = nil
+		cut:Hide()
+		stopMarker:Hide()
 
 		for i = 1, #notches do
 			notches[i]:Hide()
+			notches[i].line:SetAlpha(1)
 		end
 
 		if mode == "details" then
@@ -572,13 +658,7 @@ local Visualization do
 			for i = 1, numCheckpoints do
 				local notch = notches[i]
 				if not notch then
-					notch = CreateFrame("Frame", nil, frame) --[[@as VisualizationNotch]]
-					notch:SetSize(10, BAR_HEIGHT + 1)
-					notch:SetScript("OnEnter", NotchOnEnter)
-					notch:SetScript("OnLeave", NotchOnLeave)
-					notch:RegisterForDrag("LeftButton")
-					notch:SetScript("OnDragStart", DragStart)
-					notch:SetScript("OnDragStop", DragStop)
+					notch = CreateNotch(frame, NotchOnEnter, frame:GetFrameLevel() + 5)
 					local line = notch:CreateTexture(nil, "OVERLAY")
 					notch.line = line
 					if useAtlas then
@@ -618,6 +698,7 @@ local Visualization do
 				notch.line:SetShown(i > 1 and i < numCheckpoints) -- the ends of the bar are where the flight starts and lands, so they only have the tooltip
 				notch.passed = elapsed >= checkpoints[i].time -- the flash is for the ones we pass from here on
 				notch:EnableMouse(true)
+				ApplyClickable(notch)
 				notch:ClearAllPoints()
 				notch:SetPoint("CENTER", fill, "LEFT", checkpoints[i].time / info.duration * width, 0)
 				notch:SetFrameLevel(frame:GetFrameLevel() + 5)
@@ -625,6 +706,7 @@ local Visualization do
 			end
 		end
 
+		ResetFill()
 		frame:Show()
 		self:Refresh()
 	end
@@ -632,12 +714,24 @@ local Visualization do
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	function Visualization:Start(info)
 		activeMode = GetSanitizedMode()
-		flight, checkpoints = info, nil
-		endTime, startTime, elapsed, elapsedAt, shown = nil, nil, 0, 0, 0
+		flight, checkpoints, stopAt = info, nil, nil
+		-- nothing runs until we take off, which is some time after the flight is chosen
+		endTime, startTime, elapsed, elapsedAt, shown, positioned = nil, nil, 0, 0, 0, false
 		if frame then
-			fill:SetValue(0)
+			ResetFill()
 		end
 		self:Build()
+	end
+
+	local TAKEOFF_LAG = 0.25 -- seconds, we find out we are on the taxi on a tick of the GPS, which is half a tick (0.5 s) late on average
+
+	-- We are flying: the bar and the clock begin to run, both from here, and until the first position is known (it takes two ticks) the bar runs on at the speed of the simulation.
+	function Visualization:Takeoff()
+		if not flight or startTime then
+			return
+		end
+		local now = GetTime() - TAKEOFF_LAG
+		startTime, elapsedAt = now, now
 	end
 
 	-- `finished` if the flight ended by us landing, then the bar flashes before it goes.
@@ -648,6 +742,7 @@ local Visualization do
 		if finished and wasFlying and self:IsBarEnabled() then
 			PlaySound(BAR_FULL_SOUND, "Master", true)
 		end
+		local landedAt = stopAt and flight and stopAt / flight.duration or 1 -- the part of the bar we flew, all of it unless we asked to stop
 		flight, checkpoints, endTime, startTime = nil, nil, nil, nil
 		if hovered then
 			hovered = nil
@@ -658,7 +753,7 @@ local Visualization do
 		end
 		flashToken = flashToken + 1
 		if finished and wasFlying and frame:IsShown() then
-			fill:SetValue(1)
+			fill:SetValue(landedAt)
 			if spark then
 				spark:Hide() -- the casting bar does not show it when the cast is done
 				sparkGlow:Hide()
@@ -671,10 +766,41 @@ local Visualization do
 			C_Timer.After(FLASH_SECONDS, function()
 				if token == flashToken and frame then
 					frame:Hide()
+					ResetFill()
 				end
 			end)
 		else
 			frame:Hide()
+			ResetFill()
+		end
+	end
+
+	-- We asked to stop: the flight ends at the next taxi node, so the rest of the bar is dimmed and a marker shows where we land.
+	function Visualization:RequestStop()
+		if not flight or not checkpoints or stopAt or not frame or not frame:IsShown() then
+			return
+		end
+		local at
+		for i = 2, #checkpoints do
+			if checkpoints[i].time > shown then
+				at = i
+				break
+			end
+		end
+		if not at or at == #checkpoints then
+			return -- the next taxi node is where we land anyway
+		end
+		stopAt = checkpoints[at].time
+		local x = stopAt / flight.duration * frame:GetWidth()
+		cut:ClearAllPoints()
+		cut:SetPoint("TOPLEFT", fill, "TOPLEFT", x, 0)
+		cut:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
+		cut:Show()
+		stopMarker:ClearAllPoints()
+		stopMarker:SetPoint("CENTER", fill, "LEFT", x, 0)
+		stopMarker:Show()
+		for i = at + 1, #notches do
+			notches[i].line:SetAlpha(0.3)
 		end
 	end
 
@@ -698,7 +824,7 @@ local Visualization do
 		if not info then
 			return
 		end
-		startTime = startTime or GetTime()
+		positioned = true
 		elapsed = min(max(info.duration - seconds, 0), info.duration)
 		elapsedAt = GetTime()
 		if not self:IsStopwatchEnabled() then
@@ -712,17 +838,37 @@ local Visualization do
 			return
 		end
 		-- where we are is only known every half second, so the bar goes on at the speed of the simulation until then, and never back unless the position says we were well ahead
-		local target = min(elapsed + min(GetTime() - elapsedAt, 0.75), info.duration)
-		shown = (target >= shown or shown - target > 1) and target or shown
-		fill:SetValue(shown / info.duration)
+		local now = GetTime()
+		-- the first position takes two ticks (the distance is the step from the one before), so until it is known the bar has longer to run on
+		local target = startTime and min(elapsed + min(now - elapsedAt, positioned and 0.75 or 1.5), info.duration) or 0
+		if stopAt then
+			if positioned and elapsed + (now - elapsedAt) > stopAt + STOP_GRACE then
+				-- we are still flying well past where the stop was, it came too late for that node and the flight goes on as it was
+				ClearStop()
+			else
+				target = min(target, stopAt) -- the flight ends there
+			end
+		end
+		if target >= shown or shown - target > 1 then
+			shown = target -- a little ahead of where we are it waits for it
+		end
+		if startTime then
+			-- the status bar eases to the value by itself, a jump in position is a quick slide
+			fill:SetValue(shown / info.duration, INTERPOLATION)
+		else
+			-- not flying yet, it stays empty and does not ease
+			ResetFill()
+		end
 		if spark then
 			-- the spark stays inside the bar, the glow behind it is as long as it is and what is outside the bar is cut off by the frame it is in, with the border over the cut
 			local width = frame:GetWidth()
-			local x = min(max(shown / info.duration * width, 4), width - 4)
+			local drawn = startTime and fill.GetInterpolatedValue and fill:GetInterpolatedValue() or shown / info.duration -- where the fill is, not where it is going
+			local x = min(max(drawn * width, 4), width - 4)
 			spark:ClearAllPoints()
 			spark:SetPoint("CENTER", fill, "LEFT", x, 0)
 		end
-		local seconds = endTime and max(endTime - GetTime(), 0)
+		-- before the first position is known the time left is the one of the simulation, from where the bar has run to
+		local seconds = stopAt and max(stopAt - shown, 0) or endTime and max(endTime - GetTime(), 0) or max(info.duration - shown, 0)
 		-- rounded up so it does not show 00:00 for the last second of the flight
 		local text = seconds and seconds > 0 and lib.GameAPI.FormatDuration(ceil(seconds), true) or ""
 		label:SetText(text)
@@ -1160,6 +1306,7 @@ local GPS do
 		hooksecurefunc("TaxiRequestEarlyLanding", function()
 			if GPSInfo then
 				GPSInfo.earlyLanding = true
+				Visualization:RequestStop()
 			end
 		end)
 	end
@@ -1197,6 +1344,7 @@ local GPS do
 				end
 			end
 			if UnitOnTaxi("player") then
+				Visualization:Takeoff()
 				GPSInfo.wasOnTaxi = true
 				GPSInfo.lastOnTaxi = GetTime()
 				GPSInfo.speed = GetLiveSpeed(state.areaID, info.speedModifier)

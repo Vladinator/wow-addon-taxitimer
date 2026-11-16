@@ -53,6 +53,9 @@ sim.NODE_JOINS = {
 	[2904] = { -- Eye of Ysera, The Emerald Dream
 		[2903] = { [2905] = { 11, 7 } }, -- Verdant Landing, The Emerald Dream > Wellspring Overlook, The Emerald Dream
 	},
+	[2980] = { -- The Bloom, Razorwind Shores
+		[2973] = { [2978] = { 5, 3 } }, -- Saltfang Shoals East, Razorwind Shores > Cragthorn Highlands, Razorwind Shores
+	},
 	[3076] = { -- Small Aerie, Founder's Point
 		[3074] = { [3078] = { 6, 5 } }, -- Mear's Farm, Founder's Point > Brumewood Hollow, Founder's Point
 		[3075] = { [3073] = { 6, 4 } }, -- The Outer Banks, Founder's Point > Town Center, Founder's Point
