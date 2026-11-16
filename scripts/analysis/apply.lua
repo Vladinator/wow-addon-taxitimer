@@ -57,8 +57,13 @@ return function(ctx)
 			end
 			if action then
 				local unsure = false
+				-- the line after it can say it is not sure, unless it is the next suggestion (what that one says is about that one)
+				local after = suggestions[i + 1] or ""
+				if after:match("^%s*add to ") or after:match("^%s*change in ") or after:match("^%s*remove from ") then
+					after = ""
+				end
 				for _, words in ipairs(UNSURE) do
-					if text:find(words, 1, true) or (suggestions[i + 1] or ""):find(words, 1, true) then
+					if text:find(words, 1, true) or after:find(words, 1, true) then
 						unsure = true
 					end
 				end

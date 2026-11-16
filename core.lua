@@ -2,6 +2,11 @@ local addonName = ... ---@type string
 
 local lib = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
 
+---@param text string
+local function print(text, ...)
+	DEFAULT_CHAT_FRAME:AddMessage(format(text, ...), 1, 1, 0)
+end
+
 ---@class SV
 local SV do
 
@@ -20,11 +25,11 @@ local SV do
 	SV = {}
 
 	---@type TaxiTimerDB
-	local defaults = {
+	local TaxiTimerDBDefaults = {
 		options = {
 			debug = false,
 			record = false,
-			mode = "stopwatch",
+			mode = "bar",
 			bar = { "TOP", "TOP", 0, -140 },
 		},
 		flights = {},
@@ -61,10 +66,10 @@ local SV do
 	-- The assumption is that we call this when the addon loads, and that the user can't realistically interact with anything in-game before this happens anyway so we are in no danger of using the SV before the addon load event occurs.
 	function SV:Init()
 		if type(TaxiTimerDB) ~= "table" then
-			TaxiTimerDB = CopyTable(defaults)
+			TaxiTimerDB = CopyTable(TaxiTimerDBDefaults)
 		end
-		setmetatable(TaxiTimerDB, { __index = defaults })
-		for k, v in pairs(defaults) do
+		setmetatable(TaxiTimerDB, { __index = TaxiTimerDBDefaults })
+		for k, v in pairs(TaxiTimerDBDefaults) do
 			if type(TaxiTimerDB[k]) ~= "table" then
 				TaxiTimerDB[k] = CopyTable(v)
 			end
@@ -142,6 +147,8 @@ local Visualization do
 	---@field public flare? Texture
 	---@field public flareAnim? AnimationGroup
 
+	local BAR_FULL_SOUND = 12889 -- when you fill the flight bar
+
 	local BAR_WIDTH = 280
 	local BAR_HEIGHT = 13
 	local BAR_TEXTURE = "Interface\\TargetingFrame\\UI-StatusBar"
@@ -185,7 +192,7 @@ local Visualization do
 		end
 		if #missing > 0 then
 			if SV:GetOption("debug") then
-				print(format("|cffFFFF00%s: using legacy bar because of missing atlas: %s.|r", addonName, table.concat(missing, ", ")))
+				print("%s is using legacy bar because of missing atlas: |cffFFFFFF%s|r.", addonName, table.concat(missing, "|r, |cffFFFFFF"))
 			end
 			return false
 		end
@@ -250,16 +257,14 @@ local Visualization do
 			self.highlight:Show()
 		end
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
-		if self.number == 1 then
-			GameTooltip:AddLine(format("Departed from %s", CheckpointName(checkpoint)), 1, 1, 1)
-		else
-			GameTooltip:AddLine(CheckpointName(checkpoint), 1, 1, 1)
+		GameTooltip:AddLine(CheckpointName(checkpoint), 1, 1, 1)
+		if self.number ~= 1 then
 			if elapsed >= checkpoint.time then
-				GameTooltip:AddLine("Reached", unpack(DONE_TINT))
+				GameTooltip:AddLine("Reached", DONE_TINT[1], DONE_TINT[2], DONE_TINT[3])
 			else
 				GameTooltip:AddLine(format("%s until it is reached", lib.GameAPI.FormatDuration(ceil(checkpoint.time - elapsed), true)), 0.8, 0.8, 0.8)
 				-- asking to land early ends the flight at the next taxi node
-				if self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= elapsed) then
+				if TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= elapsed) then
 					GameTooltip:AddLine("Request Stop: land at this Flight Master.", 1, 0.82, 0)
 				end
 			end
@@ -347,9 +352,9 @@ local Visualization do
 	end
 
 	local function CreateFrames()
-		local f = CreateFrame("Frame", nil, UIParent) ---@class VisualizationFrame : Frame
+		local f = CreateFrame("Frame", format("%sFrame", addonName), UIParent) ---@class VisualizationFrame : Frame
 		f:SetSize(BAR_WIDTH, BAR_HEIGHT)
-		f:SetFrameStrata("HIGH")
+		f:SetFrameStrata("MEDIUM")
 		f:SetClampedToScreen(true)
 		f:EnableMouse(true)
 		f:RegisterForDrag("LeftButton")
@@ -377,7 +382,7 @@ local Visualization do
 			fill:SetStatusBarTexture(ATLAS.fill)
 		else
 			fill:SetStatusBarTexture(BAR_TEXTURE)
-			fill:SetStatusBarColor(unpack(FILL_COLOR))
+			fill:SetStatusBarColor(FILL_COLOR[1], FILL_COLOR[2], FILL_COLOR[3], FILL_COLOR[4])
 		end
 
 		-- what is drawn over the fill
@@ -469,18 +474,18 @@ local Visualization do
 			clockNotchLine:SetTexture(WHITE_TEXTURE)
 			clockNotchLine:SetSize(2, BAR_HEIGHT)
 		end
-		clockNotchLine:SetVertexColor(1, 0.2, 0.2, 1)
 		clockNotchLine:SetPoint("CENTER")
+		clockNotch.line = clockNotchLine
 
 		-- what is flown of the route up to the last taxi node we passed, cut off where that is the way the experience bar cuts off what it predicts
 		done = fill:CreateTexture(nil, "ARTWORK", nil, 1)
 		if useAtlas then
 			done:SetAtlas(ATLAS.done)
 			done:SetDesaturated(true)
-			done:SetVertexColor(unpack(DONE_TINT))
+			done:SetVertexColor(DONE_TINT[1], DONE_TINT[2], DONE_TINT[3])
 		else
 			done:SetTexture(BAR_TEXTURE)
-			done:SetVertexColor(unpack(DONE_COLOR))
+			done:SetVertexColor(DONE_COLOR[1], DONE_COLOR[2], DONE_COLOR[3], DONE_COLOR[4])
 		end
 		done:SetPoint("TOPLEFT", fill, "TOPLEFT")
 		done:SetPoint("BOTTOMLEFT", fill, "BOTTOMLEFT")
@@ -639,6 +644,10 @@ local Visualization do
 	---@param finished? boolean
 	function Visualization:Stop(finished)
 		local wasFlying = flight ~= nil
+		-- stopwatch plays a sound when it reaches zero, but if we use the bar simply play the same sound as we land
+		if finished and wasFlying and self:IsBarEnabled() then
+			PlaySound(BAR_FULL_SOUND, "Master", true)
+		end
 		flight, checkpoints, endTime, startTime = nil, nil, nil, nil
 		if hovered then
 			hovered = nil
@@ -714,14 +723,20 @@ local Visualization do
 			spark:SetPoint("CENTER", fill, "LEFT", x, 0)
 		end
 		local seconds = endTime and max(endTime - GetTime(), 0)
-		-- rounded up so it does not show 0:00 for the last second of the flight
-		local text = seconds and lib.GameAPI.FormatDuration(ceil(seconds), true) or ""
+		-- rounded up so it does not show 00:00 for the last second of the flight
+		local text = seconds and seconds > 0 and lib.GameAPI.FormatDuration(ceil(seconds), true) or ""
 		label:SetText(text)
 		-- when debugging, how many seconds the flight is behind (+) or ahead (-) of the simulation, which is how far the red notch is from the end of the fill
 		if startTime and SV:GetOption("debug") then
 			local behind = GetTime() - startTime - elapsed
 			isOff = abs(behind) >= (isOff and 0.5 or 1)
 			delta:SetText(isOff and format("%+d", floor(behind + 0.5)) or "")
+			-- the notch of the clock is only red when the flight is off from the simulation, as the number beside the bar is
+			if isOff then
+				clockNotch.line:SetVertexColor(1, 0, 0, 1)
+			else
+				clockNotch.line:SetVertexColor(1, 1, 1, 1)
+			end
 		else
 			isOff = false
 			delta:SetText("")
@@ -1085,6 +1100,8 @@ local GPS do
 	---@field public lastMapID? number The map we were on when last seen on the flight.
 	---@field public earlyLanding? boolean If we asked to land early at the next taxi node.
 
+	local LANDING_SOUND = 34089 -- when you dismount the taxi
+
 	local TAXI_MAX_MAP_CHANGE = 30 -- seconds we wait for a flight to carry on after it left the taxi on its way to another map (the game takes us off the taxi while the next map loads)
 	local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards we must be away from the destination for the flight to be on its way to another map and not have ended
 	local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
@@ -1202,7 +1219,7 @@ local GPS do
 							end
 							Visualization:SetProgress(simulatedTimeLeft)
 							-- DEBUG: current progress
-							-- DEFAULT_CHAT_FRAME:AddMessage(format("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", GPSInfo.distance, GPSInfo.distancePercent * 100), 1, 1, 0)
+							-- print("Flight progress |cffFFFFFF%d|r yd (%.1f%%)", GPSInfo.distance, GPSInfo.distancePercent * 100)
 							local gpsInfoTimeCorrection = GPSInfo.timeCorrection
 							-- if time correction is enabled to correct in intervals we will do the logic here
 							if gpsInfoTimeCorrection then
@@ -1220,7 +1237,7 @@ local GPS do
 										gpsInfoTimeCorrection.adjustments = gpsInfoTimeCorrection.adjustments + gpsInfoTimeCorrection.difference
 										-- announce the stopwatch time adjustments if significant enough to be noteworthy, and if we have more than just one interval (we then just summarize at the end)
 										if not info.donotadjustarrivaltime and not TAXI_TIME_CORRECT_MUTE_UPDATES and TAXI_TIME_CORRECT_INTERVAL > 1 then
-											DEFAULT_CHAT_FRAME:AddMessage("Expected arrival time adjusted by |cffFFFFFF" .. abs(gpsInfoTimeCorrection.difference) .. " seconds|r.", 1, 1, 0)
+											print("Expected arrival time adjusted by |cffFFFFFF%d seconds|r.", abs(gpsInfoTimeCorrection.difference))
 										end
 									end
 								end
@@ -1251,7 +1268,7 @@ local GPS do
 				if not TAXI_TIME_CORRECT_MUTE_SUMMARY and GPSInfo.timeCorrection then
 					local absAdjustments = abs(GPSInfo.timeCorrection.adjustments)
 					if absAdjustments > TAXI_TIME_CORRECT_IGNORE then
-						DEFAULT_CHAT_FRAME:AddMessage("Your trip was |cffFFFFFF" .. absAdjustments .. " seconds|r " .. (GPSInfo.timeCorrection.adjustments < 0 and "longer" or "shorter") .. " than indicated.", 1, 1, 0)
+						print("Your trip was |cffFFFFFF%d seconds|r %s than indicated.", absAdjustments, GPSInfo.timeCorrection.adjustments < 0 and "longer" or "shorter")
 					end
 				end
 				Timer:Stop(true)
@@ -1261,8 +1278,8 @@ local GPS do
 				end
 				table.wipe(GPSInfo)
 				GPSInfo = nil
-				PlaySound(34089, "Master", true)
-				FlashClientIcon()
+				PlaySound(LANDING_SOUND, "Master", true)
+				FlashClientIcon(true)
 			end
 		end)
 	end
@@ -1448,21 +1465,21 @@ local AddOn do
 			if command == "debug" or command == "record" then
 				local newValue = not SV:GetOption(command)
 				SV:SetOption(command, newValue)
-				print(format("|cffFFFF00%s %s %s.|r", addonName, command, newValue and "enabled" or "disabled"))
+				print("%s %s %s.", addonName, command, newValue and "enabled" or "disabled")
 				return
 			elseif command == "mode" then
 				if Visualization:SetMode(arg1) then
-					print(format("|cffFFFF00%s shows flights as: %s.|r", addonName, arg1))
+					print("%s shows flights as: %s.", addonName, arg1)
 				else
-					print(format("|cffFFFF00%s modes: off, stopwatch, bar, details.|r", addonName))
+					print("%s modes: off, stopwatch, bar, details.", addonName)
 				end
 				return
 			end
 		end
-		print(format("|cffFFFF00%s commands:|r", addonName))
-		print(format("    |cffFFFF00mode|r    (%s) Flight timer style.", tostring(SV:GetOption("mode"))))
-		print(format("    |cffFFFF00debug|r   (%s) Enable destination tooltip information.", tostring(SV:GetOption("debug"))))
-		print(format("    |cffFFFF00record|r  (%s) Records flights for later analysis.", tostring(SV:GetOption("record"))))
+		print("%s commands:", addonName)
+		print("    |cffFFFFFFmode|r    (|cffFFFFFF%s|r) Flight timer style.", tostring(SV:GetOption("mode")))
+		print("    |cffFFFFFFdebug|r   (|cffFFFFFF%s|r) Enable destination tooltip information.", tostring(SV:GetOption("debug")))
+		print("    |cffFFFFFFrecord|r  (|cffFFFFFF%s|r) Records flights for later analysis.", tostring(SV:GetOption("record")))
 	end
 
 end

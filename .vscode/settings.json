@@ -26,13 +26,13 @@
     "Lua.diagnostics.globals": [
         "DEFAULT_CHAT_FRAME",
         "FlightMap_FlightPointPinMixin",
+        "SlashCmdList",
         "Stopwatch_Clear",
         "Stopwatch_IsPlaying",
         "Stopwatch_Play",
         "Stopwatch_StartCountdown",
         "Stopwatch_Toggle",
         "StopwatchFrame",
-        "StopwatchTicker",
-        "SlashCmdList"
+        "StopwatchTicker"
     ]
 }
