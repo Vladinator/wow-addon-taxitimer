@@ -222,6 +222,7 @@ local Visualization do
 	local cut ---@type Texture What is left of the bar after the taxi node we land at when we ask to stop, it is not flown.
 	local stopMarker ---@type Texture Where that is.
 	local stopAt ---@type number? The seconds of the flight at which we land after asking to stop.
+	local stopIndex ---@type number? The checkpoint we land at after asking to stop.
 	local STOP_COLOR = { 1, 0.82, 0 } -- the yellow of the stop text in the tooltip of the notches
 	local notches = {} ---@type VisualizationNotch[]
 
@@ -265,13 +266,18 @@ local Visualization do
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:AddLine(CheckpointName(checkpoint), 1, 1, 1)
 		if self.number ~= 1 then
-			if elapsed >= checkpoint.time then
+			if stopIndex and self.number > stopIndex then
+				GameTooltip:AddLine("Not flown, we land before it.", 0.6, 0.6, 0.6)
+			elseif elapsed >= checkpoint.time then
 				GameTooltip:AddLine("Reached", DONE_TINT[1], DONE_TINT[2], DONE_TINT[3])
 			else
 				GameTooltip:AddLine(format("%s until it is reached", lib.GameAPI.FormatDuration(ceil(checkpoint.time - elapsed), true)), 0.8, 0.8, 0.8)
-				-- asking to land early ends the flight at the next taxi node
-				if TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= elapsed) then
-					GameTooltip:AddLine("Request Stop: land at this Flight Master.", 1, 0.82, 0)
+				if stopIndex then
+					if self.number == stopIndex then
+						GameTooltip:AddLine("Stop requested: landing at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
+					end
+				elseif TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= elapsed) then
+					GameTooltip:AddLine("Request Stop: land at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
 				end
 			end
 		end
@@ -595,7 +601,7 @@ local Visualization do
 
 	-- Takes back the dimmed end of the bar and the marker of the stop.
 	local function ClearStop()
-		stopAt = nil
+		stopAt, stopIndex = nil, nil
 		if cut then
 			cut:Hide()
 			stopMarker:Hide()
@@ -644,7 +650,7 @@ local Visualization do
 		end
 
 		done:Hide()
-		stopAt = nil
+		stopAt, stopIndex = nil, nil
 		cut:Hide()
 		stopMarker:Hide()
 
@@ -714,7 +720,7 @@ local Visualization do
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	function Visualization:Start(info)
 		activeMode = GetSanitizedMode()
-		flight, checkpoints, stopAt = info, nil, nil
+		flight, checkpoints, stopAt, stopIndex = info, nil, nil, nil
 		-- nothing runs until we take off, which is some time after the flight is chosen
 		endTime, startTime, elapsed, elapsedAt, shown, positioned = nil, nil, 0, 0, 0, false
 		if frame then
@@ -790,7 +796,7 @@ local Visualization do
 		if not at or at == #checkpoints then
 			return -- the next taxi node is where we land anyway
 		end
-		stopAt = checkpoints[at].time
+		stopAt, stopIndex = checkpoints[at].time, at
 		local x = stopAt / flight.duration * frame:GetWidth()
 		cut:ClearAllPoints()
 		cut:SetPoint("TOPLEFT", fill, "TOPLEFT", x, 0)
@@ -1354,8 +1360,16 @@ local GPS do
 					if GPSInfo.mapID and GPSInfo.lastMapID and GPSInfo.mapID ~= GPSInfo.lastMapID and info.maps[GPSInfo.mapID] and info.maps[GPSInfo.lastMapID] then
 						GPSInfo.lastX = nil
 					end
-					if GPSInfo.lastX then
-						GPSInfo.distance = GPSInfo.distance - sqrt((GPSInfo.lastX - GPSInfo.x)^2 + (GPSInfo.lastY - GPSInfo.y)^2) * travelScale
+					local step ---@type number? The yards flown since the last tick.
+					if GPSInfo.lastX and GPSInfo.x then
+						-- we use the position to calculate the step
+						step = sqrt((GPSInfo.lastX - GPSInfo.x)^2 + (GPSInfo.lastY - GPSInfo.y)^2) * travelScale
+					elseif not GPSInfo.x and GPSInfo.lastTick then
+						-- in instances there is no position, so we extrapolate using purely the speed and time elapsed
+						step = GetUnitSpeed("player") * (GetTime() - GPSInfo.lastTick)
+					end
+					if step then
+						GPSInfo.distance = GPSInfo.distance - step
 						GPSInfo.distancePercent = GPSInfo.distance / info.distance
 						if GPSInfo.distance > 0 and GPSInfo.speed > 0 then
 							local timeCorrection = TAXI_TIME_CORRECT
@@ -1403,6 +1417,7 @@ local GPS do
 				end
 				Recorder:Tick(GPSInfo.x, GPSInfo.y, GPSInfo.z, GPSInfo.mapID, GPSInfo.distance)
 				GPSInfo.lastSpeed = GPSInfo.speed
+				GPSInfo.lastTick = GetTime()
 				GPSInfo.lastX, GPSInfo.lastY, GPSInfo.lastMapID = GPSInfo.x, GPSInfo.y, GPSInfo.mapID
 			elseif not GPSInfo.wasOnTaxi then
 				Recorder:Idle()

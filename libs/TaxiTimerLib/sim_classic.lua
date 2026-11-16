@@ -18,6 +18,11 @@ sim.SKIP_RETRACED = false
 sim.AREA_SPEEDS = {
 }
 
+-- How much longer (or shorter) than the points say the flights of a taxi map are, for the maps where the game gives no positions (instances) to tell that from.
+-- The yards of the flight are multiplied by it, so the flights take as long as the recorded ones. The taxi maps not listed are flown as far as the points say.
+sim.AREA_DISTANCE_SCALE = {
+}
+
 -- Taxi nodes where the game flies into the node and back out when passing through it, whole paths, however much the paths in and out run alongside each other (see `SKIP_RETRACED`).
 sim.RETRACE_EXCEPTIONS = {
 }

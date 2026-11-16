@@ -19,7 +19,7 @@
 ---@field lines string[] The lines that say what to add, change or remove, as they were shown.
 
 ---The tables of the simulation that are changed for a moment.
----@alias SuggestTable "AREA_SPEEDS"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_DISTANCE_SCALE"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"
 
 ---@param ctx AnalysisContext
 ---@return fun(analyses: FlightAnalysis[], simFile?: string, listJoins?: boolean): SuggestedChanges[]
@@ -34,6 +34,8 @@ return function(ctx)
 	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
 	local PATH_MIN_NET_SECONDS = 1 -- seconds all of the flights on a taxi map must get closer to how long they took for a speed of a path to be suggested
 	local PATH_MIN_SEEN = 0.6 -- how much of a path must have been seen in flight for it to be given speeds of its own
+	local DISTANCE_SCALE_MIN_FLIGHTS = 3 -- flights on a taxi map without positions (an instance) before its distance is scaled
+	local DISTANCE_SCALE_MIN_SHARE = 0.01 -- how much longer or shorter than the simulation the flights take, as a share, before it is scaled
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
 	local PATH_CONFIRMED_SECONDS = 2 -- the same, for a path that two or more flights agree on (all of them flew it at the same speeds, and each is this far off the same way)
 	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
@@ -51,20 +53,11 @@ return function(ctx)
 	---@param value any
 	---@return fun() restore Puts back what it was.
 	local function override(lib, name, key, value)
-		local created = false
 		local tbl = lib[name]
-		if not tbl then
-			tbl = {}
-			lib[name] = tbl
-			created = true
-		end
 		local old = tbl[key]
 		tbl[key] = value
 		return function()
 			tbl[key] = old
-			if created then
-				lib[name] = nil
-			end
 		end
 	end
 
@@ -295,7 +288,7 @@ return function(ctx)
 	--
 
 	-- `lib.Sim.NODE_JOINS` with the join of flying from `from` past `node` to `to` set to `join` (or without it), the tables that are changed are copies
-	---@param joins? table<number, table<number, table<number, number[]>>>
+	---@param joins table<number, table<number, table<number, number[]>>>
 	---@param node number
 	---@param from number
 	---@param to number
@@ -303,7 +296,7 @@ return function(ctx)
 	---@return table<number, table<number, number[]>> ofNode What to have for `node`.
 	local function withJoin(joins, node, from, to, join)
 		local ofNode = {}
-		for fromNode, toNodes in pairs(joins and joins[node] or {}) do
+		for fromNode, toNodes in pairs(joins[node] or {}) do
 			local copy = {}
 			for toNode, value in pairs(toNodes) do
 				copy[toNode] = value
@@ -389,7 +382,7 @@ return function(ctx)
 			local join = joins[key]
 			local node, from, to = join.node, join.from, join.to
 			local count = #join.flights
-			local has = lib.Sim.NODE_JOINS and lib.Sim.NODE_JOINS[node] and lib.Sim.NODE_JOINS[node][from] and lib.Sim.NODE_JOINS[node][from][to]
+			local has = lib.Sim.NODE_JOINS[node] and lib.Sim.NODE_JOINS[node][from] and lib.Sim.NODE_JOINS[node][from][to]
 			local name = format("%s, flying from %s to %s", join.flights[1].data.nodeName(node), join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to))
 			local plural = count == 1 and "" or "s"
 
@@ -414,7 +407,7 @@ return function(ctx)
 				local closer = now - with >= JOIN_MIN_SECONDS * count and nowYards - withYards >= JOIN_MIN_YARDS * count
 				-- a taxi node that is flown into and back out whole only needs to be left out of the rule that skips where the paths run alongside each other
 				local excepts = false
-				if join.whole == count and closer and not (lib.Sim.RETRACE_EXCEPTIONS and lib.Sim.RETRACE_EXCEPTIONS[node]) then
+				if join.whole == count and closer and not lib.Sim.RETRACE_EXCEPTIONS[node] then
 					local restoreException = override(lib.Sim, "RETRACE_EXCEPTIONS", node, true)
 					excepts = offBy(join.flights) - with < count
 					restoreException()
@@ -586,11 +579,11 @@ return function(ctx)
 		local pathLines, pathNotes, pathOrder, small = {}, {}, {}, 0
 		local pathNew = {} ---@type table<number, table<number, number>|false> What each suggested line sets for the path (`false` to remove it), to see what it does to all of the flights on the path.
 		local sim = {
-			speeds = lib.Sim.AREA_SPEEDS or {},
-			ramps = lib.Sim.AREA_RAMPS or {},
-			spacing = lib.Sim.AREA_SPACING or {},
-			nodes = lib.Sim.NODE_SPEEDS or {},
-			paths = lib.Sim.PATH_SPEEDS or {},
+			speeds = lib.Sim.AREA_SPEEDS,
+			ramps = lib.Sim.AREA_RAMPS,
+			spacing = lib.Sim.AREA_SPACING,
+			nodes = lib.Sim.NODE_SPEEDS,
+			paths = lib.Sim.PATH_SPEEDS,
 		}
 
 		for _, map in ipairs(mapOrder) do
@@ -614,6 +607,30 @@ return function(ctx)
 				else
 					out[#out + 1] = format("    %s AREA_SPEEDS:    [%d] = %d,", sim.speeds[map] and "change in" or "add to", map, cruise)
 					restores[#restores + 1] = override(lib.Sim, "AREA_SPEEDS", map, cruise)
+				end
+			end
+
+			-- an instance gives no positions to tell how far its flights are, so all there is is how long they took: its distance is scaled for the simulation to take as long
+			local blind = #info.flights >= DISTANCE_SCALE_MIN_FLIGHTS
+			for _, a in ipairs(info.flights) do
+				blind = blind and a.noPosition
+			end
+			if blind then
+				local actual, estimated = 0, 0
+				for _, a in ipairs(info.flights) do
+					local replay = a:replay()
+					if replay then
+						actual = actual + a.actual - a.jumpTime
+						estimated = estimated + replay.duration
+					end
+				end
+				local ratio = estimated > 0 and actual / estimated or 1
+				if abs(ratio - 1) >= DISTANCE_SCALE_MIN_SHARE then
+					local current = lib.Sim.AREA_DISTANCE_SCALE[map]
+					local scaled = util.round((current or 1) * ratio, 3)
+					out[#out + 1] = format("  distance: the %d flights took %.1f%% %s than the simulation gives, as there are no positions the distance of the taxi map is scaled", #info.flights, abs(ratio - 1) * 100, ratio > 1 and "longer" or "shorter")
+					out[#out + 1] = format("    %s AREA_DISTANCE_SCALE:    [%d] = %s,", current and "change in" or "add to", map, format("%.3f", scaled))
+					restores[#restores + 1] = override(lib.Sim, "AREA_DISTANCE_SCALE", map, scaled)
 				end
 			end
 

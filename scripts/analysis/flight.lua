@@ -47,6 +47,7 @@
 ---@field track TrackSample[]
 ---@field steps table<number, TrackStep> `steps[i]` is between sample `i - 1` and sample `i`.
 ---@field hasOverride boolean
+---@field noPosition boolean If the game gave no positions (in instances), so only the time and the speed of the samples are of use.
 ---@field moveTime number
 ---@field stillTime number
 ---@field jumpTime number
@@ -104,6 +105,7 @@ return function(ctx)
 			track = {}, -- { t, x, y, map, speed, timer, remaining, point } per sample, x and y matching the taxi data
 			steps = {}, -- [i] = { dt, yards (2D), speed, kind } between sample i - 1 and sample i, kind is "move", "still" or "jump"
 			hasOverride = false,
+			noPosition = false,
 			moveTime = 0,
 			stillTime = 0,
 			jumpTime = 0,
@@ -147,6 +149,14 @@ return function(ctx)
 			self.track[#self.track + 1] = { t = s[1], x = x, y = y, map = s[5], speed = s[6], timer = s[7], remaining = s[8], point = s[9] }
 		end
 		local track = self.track
+		-- the game gives no position in instances (`UnitPosition` is nil), so the samples have zeros and the map -1, and there are only the time and the speed
+		self.noPosition = #track >= 2
+		for _, s in ipairs(track) do
+			if s.x ~= 0 or s.y ~= 0 then
+				self.noPosition = false
+				break
+			end
+		end
 		local scale = (r.distance2D and r.distance2D ~= 0) and r.distance / r.distance2D or 1
 		for j = 2, #track do
 			local a, b = track[j - 1], track[j]
@@ -180,7 +190,7 @@ return function(ctx)
 			end
 		end
 		-- make sure our position and the taxi data agree on what is x and what is y
-		if #track > 0 then
+		if #track > 0 and not self.noPosition then
 			local direct, swapped = 0, 0
 			for _, i in ipairs({ 1, floor(#track / 2) + 1, #track }) do
 				local s = track[i]
@@ -248,7 +258,7 @@ return function(ctx)
 		local destination = self.data.points[points[#points] or 0]
 		if count < 2 then
 			self.incomplete = "not enough samples"
-		elseif destination then
+		elseif destination and not self.noPosition then
 			local last = track[count]
 			local distance = self:sameMap(last.map, destination.map) and hypot(destination.x - last.x, destination.y - last.y) or INF
 			if distance > max(self.far, 100) then
@@ -258,6 +268,9 @@ return function(ctx)
 			end
 		elseif early then
 			self.incomplete = early
+		end
+		if self.noPosition and not self.incomplete then
+			self.warnings[#self.warnings + 1] = "the game gave no positions (an instance), so only the time and the speed are used, and that the flight went all the way to the destination can not be checked"
 		end
 		-- a flight the game lost (a failed teleport or map load leaves us stuck while the taxi still goes on) does not tell how long the route takes
 		-- standing still at the very end is the wait for the server that `buildTimes` leaves out, so only what was followed by moving on counts
@@ -344,6 +357,9 @@ return function(ctx)
 	---@param after number
 	---@return number? seconds
 	function Flight:passedAt(point, after)
+		if self.noPosition then
+			return nil
+		end
 		local track = self.track
 		local nearSq = self.near * self.near
 		for j = 2, #track do
@@ -593,6 +609,9 @@ return function(ctx)
 		local lib = self.lib
 		local paths, intervals = {}, {}
 		self._observed = { paths = paths, intervals = intervals }
+		if self.noPosition then
+			return paths, intervals
+		end
 		local geometry = self:geometry()
 		if not geometry then
 			return paths, intervals
@@ -813,7 +832,9 @@ return function(ctx)
 		if from then text[#text + 1] = format("%.0f yd from where the first taxi node is", hypot(from.x - first.x, from.y - first.y)) end
 		if lastPoint then text[#text + 1] = format("last seen %.0f yd from the last point", hypot(lastPoint.x - last.x, lastPoint.y - last.y)) end
 		if to then text[#text + 1] = format("%.0f yd from where the last taxi node is", hypot(to.x - last.x, to.y - last.y)) end
-		if #text > 0 then
+		if self.noPosition then
+			add("    no positions were given (an instance), so the distance flown is the speed times the time")
+		elseif #text > 0 then
 			add("    " .. concat(text, ", "))
 		end
 		if self.jumps > 0 then
@@ -821,6 +842,7 @@ return function(ctx)
 		end
 
 		-- points
+		if not self.noPosition then
 		add("")
 		add("  Points")
 		local used, missed = {}, {}
@@ -862,6 +884,8 @@ return function(ctx)
 		add(format("    %d of the %d points the estimate skipped were flown (within %d yd)%s", #flown, skipped, self.near, #flown > 0 and ":" or ""))
 		for _, line in ipairs(flown) do
 			add(line)
+		end
+
 		end
 
 		-- speed

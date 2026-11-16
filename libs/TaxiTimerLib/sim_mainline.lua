@@ -24,6 +24,7 @@ sim.AREA_SPEEDS = {
 	[1922] = 50, -- Draenor
 	[2046] = 50, -- Zereth Mortis
 	[2057] = 50, -- Dragon Isles
+	[2149] = 25, -- The Nokhud Offensive
 	[2175] = 40, -- Zaralek Cavern
 	[2241] = 50, -- Emerald Dream
 	[2276] = 50, -- Khaz Algar
@@ -32,6 +33,12 @@ sim.AREA_SPEEDS = {
 	[2402] = 50, -- Razorwind Shores
 	[2479] = 50, -- Voidstorm
 	[2480] = 50, -- Harandar
+}
+
+-- How much longer (or shorter) than the points say the flights of a taxi map are, for the maps where the game gives no positions (instances) to tell that from.
+-- The yards of the flight are multiplied by it, so the flights take as long as the recorded ones. The taxi maps not listed are flown as far as the points say.
+sim.AREA_DISTANCE_SCALE = {
+	[2149] = 1.041, -- The Nokhud Offensive
 }
 
 -- Taxi nodes where the game flies into the node and back out when passing through it, whole paths, however much the paths in and out run alongside each other (see `SKIP_RETRACED`).
@@ -49,6 +56,9 @@ sim.NODE_JOINS = {
 	},
 	[1506] = { -- Telaari Station, Nagrand
 		[1503] = { [1573] = { 7, 7 } }, -- Throne of the Elements, Nagrand > Nivek's Overlook, Nagrand
+	},
+	[2792] = { -- Maruukai, Ohn'ahran Plains
+		[2795] = { [2799] = { 10, 3 } }, -- Broadhoof Outpost, Ohn'ahran Plains > Rusza'thar Reach, Ohn'ahran Plains
 	},
 	[2904] = { -- Eye of Ysera, The Emerald Dream
 		[2903] = { [2905] = { 11, 7 } }, -- Verdant Landing, The Emerald Dream > Wellspring Overlook, The Emerald Dream

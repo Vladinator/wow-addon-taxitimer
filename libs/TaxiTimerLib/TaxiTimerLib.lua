@@ -356,8 +356,7 @@ lib.TAXI_SPEED_FALLBACK = TAXI_SPEED_FALLBACK
 ---@param areaID? number
 ---@return number speed
 function lib.Speed(areaID)
-	local areaSpeeds = lib.Sim.AREA_SPEEDS
-	local speed = areaID and areaSpeeds and areaSpeeds[areaID]
+	local speed = areaID and lib.Sim.AREA_SPEEDS[areaID]
 
 	if speed then
 		return speed * TAXI_SPEED_SCALE
@@ -689,7 +688,7 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	for pathIndex = 1, lib.Sim.SKIP_RETRACED and numPaths - 1 or 0 do
 		-- the game flies into some taxi nodes and back out whole, however much the two paths run alongside each other
 		local last, first
-		if not (exceptions and exceptions[nodeIds[pathIndex]]) then
+		if not exceptions[nodeIds[pathIndex]] then
 			last, first = GetRetrace(paths[pathIndex], paths[pathIndex + 1])
 		end
 
@@ -702,7 +701,7 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	-- the joins that were seen to be flown another way than the rules above give
 	local nodeJoins = lib.Sim.NODE_JOINS
 
-	for pathIndex = 1, nodeJoins and numPaths - 1 or 0 do
+	for pathIndex = 1, numPaths - 1 do
 		local joins = nodeJoins[nodeIds[pathIndex]]
 		local join = joins and joins[fromIds[pathIndex]]
 		join = join and join[nodeIds[pathIndex + 1]]
@@ -813,8 +812,7 @@ end
 ---@param point TaxiTimerLib-1.0_TaxiPathNode
 ---@return number? speed
 local function GetPathSpeed(point)
-	local pathSpeeds = lib.Sim.PATH_SPEEDS
-	local speeds = pathSpeeds and pathSpeeds[point.pathId]
+	local speeds = lib.Sim.PATH_SPEEDS[point.pathId]
 
 	if not speeds then
 		return
@@ -837,8 +835,7 @@ end
 local function GetPointSpeeds(points, areaID)
 	local speeds = {} ---@type (number|false)[]
 	local numPoints = #points
-	local areaRamps = lib.Sim.AREA_RAMPS
-	local ramp = areaID and areaRamps and areaRamps[areaID]
+	local ramp = areaID and lib.Sim.AREA_RAMPS[areaID]
 	local isDynamic = false
 
 	for i = 1, numPoints do
@@ -875,8 +872,7 @@ end
 ---@param yards number
 ---@return number? speed
 local function GetSpacingSpeed(areaID, yards)
-	local areaSpacing = lib.Sim.AREA_SPACING
-	local spacing = areaID and areaSpacing and areaSpacing[areaID]
+	local spacing = areaID and lib.Sim.AREA_SPACING[areaID]
 
 	if not spacing then
 		return
@@ -984,9 +980,8 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	local speeds, isDynamic = GetPointSpeeds(geometry.points, areaID)
 
 	-- some taxi nodes have a mount that flies faster or slower than the others of the taxi map, the whole flight is flown on the mount of the node it starts at
-	local nodeSpeeds = lib.Sim.NODE_SPEEDS
 	local firstNode = geometry.nodes[1]
-	local nodeSpeed = firstNode and nodeSpeeds and nodeSpeeds[firstNode.nodeID]
+	local nodeSpeed = firstNode and lib.Sim.NODE_SPEEDS[firstNode.nodeID]
 
 	if nodeSpeed then
 		areaSpeed = nodeSpeed * TAXI_SPEED_SCALE
@@ -994,6 +989,9 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	end
 
 	areaSpeed = areaSpeed * modifier
+
+	-- the taxi maps where what is flown is longer or shorter than the points say (instances, which give no positions to find that out from)
+	local scale = areaID and lib.Sim.AREA_DISTANCE_SCALE[areaID] or 1
 
 	local segments = {} ---@type TaxiTimerLib-1.0_FlightSegment[]
 	local steps = {} ---@type TaxiTimerLib-1.0_FlightStep[]
@@ -1018,17 +1016,17 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 			end
 
 			numSteps = numSteps + 1
-			steps[numSteps] = { distance = intervals[j], speed = speed, distanceLeft = 0, durationLeft = 0 }
-			segmentDuration = segmentDuration + intervals[j] / speed
+			steps[numSteps] = { distance = intervals[j] * scale, speed = speed, distanceLeft = 0, durationLeft = 0 }
+			segmentDuration = segmentDuration + intervals[j] * scale / speed
 		end
 
 		numPoints = numPoints + #segment.points
 		segments[i] = {
 			points = segment.points,
 			intervals = intervals,
-			distance = segment.distance,
+			distance = segment.distance and segment.distance * scale,
 			distance2D = segment.distance2D,
-			speed = segmentDuration > 0 and (segment.distance or 0) / segmentDuration or areaSpeed,
+			speed = segmentDuration > 0 and (segment.distance or 0) * scale / segmentDuration or areaSpeed,
 		}
 		duration = duration + segmentDuration
 	end
@@ -1045,13 +1043,11 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	end
 
 	if geometry.distance > 0 and duration > 0 then
-		local fixedTime = lib.Sim.AREA_FIXED_TIME
-
 		---@type TaxiTimerLib-1.0_FlightInfo
 		local info = {
-			distance = geometry.distance,
+			distance = geometry.distance * scale,
 			distance2D = geometry.distance2D,
-			speed = geometry.distance / duration,
+			speed = geometry.distance * scale / duration,
 			duration = duration,
 			delay = geometry.delay,
 			delayIncluded = INCLUDE_STOP_DELAYS,
@@ -1070,7 +1066,7 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 			info.duration = info.duration + geometry.delay
 		end
 
-		info.donotadjustarrivaltime = not not (areaID and fixedTime and fixedTime[areaID])
+		info.donotadjustarrivaltime = not not (areaID and lib.Sim.AREA_FIXED_TIME[areaID])
 
 		return info
 	end
