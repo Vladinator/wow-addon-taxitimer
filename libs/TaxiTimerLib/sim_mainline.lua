@@ -58,6 +58,9 @@ sim.NODE_JOINS = {
 	[3133] = { -- Fairbreeze Village, Eversong Woods
 		[3134] = { [3131] = { 7, 6 } }, -- Tranquillien, Eversong Woods > Sanctum of Light, Silvermoon City
 	},
+	[3168] = { -- Tokka's Landing, The Coiled Isle
+		[3131] = { [3288] = { 24, 5 } }, -- Sanctum of Light, Silvermoon City > Amani Foothold, Vaults of Atal'Utek
+	},
 }
 
 -- Spells that make the flight path mount fly faster or slower, the speeds of the flight are multiplied by `multiplier` for a player that knows the spell (so it is not part of the speeds below).

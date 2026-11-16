@@ -70,6 +70,31 @@ function shim.loadfile(path, env)
 	return shim.load(text, "@" .. path, env)
 end
 
+---Returns the names in a folder in rising order, there are none if there is no such folder.
+---@param path string
+---@return string[] names
+function shim.listdir(path)
+	local names = {} ---@type string[]
+	local command
+	if package.config:sub(1, 1) == "\\" then
+		command = 'dir /b "' .. (path:gsub("/", "\\")) .. '" 2>nul'
+	else
+		command = 'ls -1 "' .. path .. '" 2>/dev/null'
+	end
+	local pipe = io.popen(command)
+	if pipe then
+		for line in pipe:lines() do
+			local name = line:gsub("[\r\n]+$", "")
+			if name ~= "" then
+				names[#names + 1] = name
+			end
+		end
+		pipe:close()
+	end
+	table.sort(names)
+	return names
+end
+
 ---Returns what the saved variables file has in its global variables.
 ---@param path string
 ---@return table<string, any>? globals

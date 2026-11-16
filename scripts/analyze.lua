@@ -15,7 +15,7 @@ Some paths change the flight speed as they pass their points. These speeds are n
 
 Runs in Lua 5.1 and later (use `lua`, `lua5.1`, `luajit` or the Lua of the Lua language server):
 
-	lua scripts/analyze.lua <WTF/Account/.../SavedVariables/TaxiTimer.lua> [options]
+	lua scripts/analyze.lua [WTF/Account/.../SavedVariables/TaxiTimer.lua] [options]
 
 Every flight is kept in `scripts/recordings.lua`: the flights of the saved variables that are not in it yet are added to it, and it is all of its flights that are analyzed, from old to new.
 So the saved variables can be emptied (or be those of another account) without losing what the sim files were made from. Without the saved variables file the flights that were kept are analyzed.
@@ -24,6 +24,7 @@ A flight is the same flight when it was picked at the same second, flew the same
 
 Options:
 
+	--wow=FOLDER    take the flights from the saved variables of every game in the World of Warcraft folder (`_retail_`, `_classic_` and so on, in `WTF/Account/<account>/SavedVariables/TaxiTimer.lua`)
 	--flight=N      show the details of flight N (as numbered in the summary), can be repeated
 	--all           show the details of every flight
 	--speeds        show the speed each path was flown at from each of its points, as lines for the PATH_SPEEDS table of the sim file
@@ -68,6 +69,7 @@ local format = string.format
 --
 
 local file ---@type string? The saved variables file.
+local wowDir ---@type string? The World of Warcraft folder, to look for the saved variables of every game in.
 local wanted = {} ---@type table<number, boolean> The flights to show the details of.
 local all, speeds, suggest, joins = false, false, true, false
 local client ---@type TaxiTimerLib-1.0_GameFlavor? The game to use instead of the one the flights were recorded on.
@@ -82,7 +84,7 @@ local far = 60 ---@type number
 
 ---@return never
 local function usage()
-	warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--apply] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
+	warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--wow=FOLDER] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--apply] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
 	os.exit(1)
 end
 
@@ -109,6 +111,8 @@ for _, option in ipairs(arg or {}) do
 		joins = true
 	elseif option == "--no-suggest" then
 		suggest = false
+	elseif option:match("^--wow=.+$") then
+		wowDir = option:match("^--wow=(.+)$")
 	elseif option:match("^--sim=.+$") then
 		simFile = option:match("^--sim=(.+)$")
 	elseif option:match("^--client=%w+$") then
@@ -128,7 +132,7 @@ end
 if file and not shim.readfile(file) then
 	usage()
 end
-if not file and not (archivePath and shim.readfile(archivePath)) then
+if not file and not wowDir and not (archivePath and shim.readfile(archivePath)) then
 	usage() -- without saved variables the flights that were kept are analyzed, if there are any
 end
 
@@ -136,27 +140,67 @@ end
 -- MARK: The flights
 --
 
-local records = {} ---@type FlightRecord[]
+-- the saved variables files to take the flights from: the one that was given, and the one of every game in the World of Warcraft folder
+local files = {} ---@type string[]
+local labels = {} ---@type table<string, string> What to call a file when the flights of it are counted.
 if file then
-	local globals, err = shim.savedvariables(file)
-	if not globals then
-		warn("unable to read %s: %s", file, tostring(err))
-		os.exit(1)
+	files[#files + 1] = file
+	labels[file] = file
+end
+if wowDir then
+	local folder = wowDir:gsub("[/\\]+$", "")
+	local numFound = 0
+	for _, game in ipairs(shim.listdir(folder)) do
+		if game:match("^_.+_$") then -- like `_retail_` and `_classic_`
+			local accounts = folder .. "/" .. game .. "/WTF/Account"
+			for _, account in ipairs(shim.listdir(accounts)) do
+				local path = accounts .. "/" .. account .. "/SavedVariables/TaxiTimer.lua"
+				if shim.readfile(path) then
+					numFound = numFound + 1
+					files[#files + 1] = path
+					labels[path] = game .. " " .. account
+				end
+			end
+		end
 	end
-	local db = globals.TaxiTimerDB ---@type { flights?: FlightRecord[] }?
-	if type(db) == "table" and type(db.flights) == "table" then
-		records = db.flights
+	if numFound == 0 then
+		warn("no TaxiTimer.lua was found in the SavedVariables of the games in %s (looked for _game_/WTF/Account/<account>/SavedVariables/TaxiTimer.lua)", folder)
 	end
 end
 
--- the flights are kept in a file of the repo, so they are still there when the saved variables are emptied
-local source = file or archivePath or "?"
+local records = {} ---@type FlightRecord[]
+local numAdded, numLoose = 0, 0
+for _, path in ipairs(files) do
+	local globals, err = shim.savedvariables(path)
+	if not globals then
+		warn("unable to read %s: %s", path, tostring(err))
+		if path == file then
+			os.exit(1)
+		end
+	else
+		local db = globals.TaxiTimerDB ---@type { flights?: FlightRecord[] }?
+		local flights = type(db) == "table" and type(db.flights) == "table" and db.flights or {}
+		if archivePath then
+			-- the flights are kept in a file of the repo, so they are still there when the saved variables are emptied
+			local added, loose
+			records, added, loose = archive.merge(archivePath, flights)
+			numAdded, numLoose = numAdded + added, numLoose + loose
+			printf("%s: %d flight%s, %d new\n", labels[path], #flights, #flights == 1 and "" or "s", added)
+		else
+			for _, flight in ipairs(flights) do
+				records[#records + 1] = flight
+			end
+			printf("%s: %d flight%s\n", labels[path], #flights, #flights == 1 and "" or "s")
+		end
+	end
+end
+local source = #files == 1 and files[1] or (#files > 1 and format("%d saved variables files", #files)) or archivePath or "?"
 if archivePath then
-	local added, loose
-	records, added, loose = archive.merge(archivePath, records)
-	if file then
-		printf("%d new flight%s added to %s, which has %d now%s\n", added, added == 1 and "" or "s", archivePath, #records - loose, loose > 0 and format(" (%d flights do not say when they were flown and are not kept)", loose) or "")
-		source = file .. " and " .. archivePath
+	if #files == 0 then
+		records = archive.merge(archivePath, {})
+	else
+		printf("%d new flight%s added to %s, which has %d now%s\n", numAdded, numAdded == 1 and "" or "s", archivePath, #records - numLoose, numLoose > 0 and format(" (%d flights do not say when they were flown and are not kept)", numLoose) or "")
+		source = source .. " and " .. archivePath
 	end
 end
 if #records == 0 then

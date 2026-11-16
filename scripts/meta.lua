@@ -59,6 +59,12 @@ function io.stderr:write(...) end
 ---@return iofile
 function io.open(name, mode) end
 
+---Runs a command and reads what it writes.
+---@param command string
+---@param mode? string
+---@return iofile?
+function io.popen(command, mode) end
+
 ---@class oslib
 os = {}
 

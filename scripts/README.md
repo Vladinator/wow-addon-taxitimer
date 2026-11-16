@@ -28,6 +28,7 @@ The output lists each flight with how far off the simulation is now, the flights
 
 | Option | What it does |
 | --- | --- |
+| `--wow=FOLDER` | Take the flights from the SavedVariables of every game in the World of Warcraft folder (`_retail_`, `_classic_`, `_forever_` and so on, in every account). |
 | `--apply` | Write the suggested changes to the sim file and analyze again until nothing is left. Unsure suggestions are shown, not written. |
 | `--coverage` | Show how much of each map has been flown, and the maps without flights. |
 | `--joins` | List every taxi node that was flown past, with the points flown there, and a table of the nodes where the game could cut a loop with how much the cut saves (to see if one rule fits them all). |

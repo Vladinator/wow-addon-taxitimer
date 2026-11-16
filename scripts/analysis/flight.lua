@@ -57,6 +57,7 @@
 ---@field start number Seconds since clicked we took off.
 ---@field end_ number Seconds since clicked we landed.
 ---@field uncertainty number Seconds the actual time can be off by.
+---@field stalled? number Seconds the flight stood still at the end, which are left out of `actual`.
 ---@field actual number Seconds the flight took.
 ---@field estimate number Seconds the flight was estimated to take.
 ---@field _geometry? TaxiTimerLib-1.0_FlightGeometry|false
@@ -72,6 +73,7 @@ return function(ctx)
 	local hypot, hasFlag, clock = util.hypot, util.hasFlag, util.clock
 
 	local STOP = 0x2
+	local STALL_SECONDS = 3 -- seconds a flight can stand still at the end before it is a wait for the server and not the landing
 
 	---@class FlightAnalysis
 	local Flight = {}
@@ -216,6 +218,22 @@ return function(ctx)
 		self.uncertainty = ((first - ground) + (landed - last)) / 2 -- seconds the actual time can be off by
 		self.actual = self.end_ - self.start
 		self.estimate = r.estimate or 0
+
+		-- a flight that stands still at the end (the game waiting for the server to hand us over) does not end when we arrive, so it is cut where it stopped moving, the waiting is not part of the flight
+		local track, steps = self.track, self.steps
+		local lastMove = #track
+		while lastMove > 1 and steps[lastMove] and steps[lastMove].kind == "still" do
+			lastMove = lastMove - 1
+		end
+		local stalled = #track > 0 and track[#track].t - track[lastMove].t or 0
+		if stalled > STALL_SECONDS then
+			self.stalled = stalled
+			self.stillTime = self.stillTime - stalled
+			self.end_ = track[lastMove].t + (landed - last) / 2 -- the same time after it stopped as the other flights have
+			self.uncertainty = (first - ground) / 2 + 0.25
+			self.actual = self.end_ - self.start
+			self.warnings[#self.warnings + 1] = format("the flight stood still for %.1f sec at the end (waiting for the game to hand us over), that time is left out of how long it took", stalled)
+		end
 	end
 
 	-- flights that did not go all the way to the destination must not be compared to the estimate
