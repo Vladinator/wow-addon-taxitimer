@@ -94,6 +94,7 @@ sim.AREA_RAMPS = {
 	[1922] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- Draenor
 	[2046] = { takeoff = { 25, 30, 40 }, landing = { 40, 30, 25 } }, -- Zereth Mortis
 	[2175] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Zaralek Cavern
+	[2276] = { takeoff = { 30 }, landing = {} }, -- Khaz Algar
 }
 
 -- Taxi maps where the flight is slower the closer the points are to each other, as `{ yards, speed }` in rising order: a stretch between two points shorter than the yards is flown at the speed.
@@ -121,6 +122,7 @@ sim.PATH_SPEEDS = {
 	[9382] = { [1] = 25 }, -- Old Loamm Road, Ohn'ahran Plains > Old Loamm Road, Zaralek Cavern
 	[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
 	[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps
+	[10148] = { [1] = 65 }, -- Opportunity Point, The Ringing Deeps > Gutterville, The Ringing Deeps
 }
 
 ---@diagnostic disable-next-line: deprecated

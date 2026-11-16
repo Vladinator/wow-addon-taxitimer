@@ -74,6 +74,7 @@ return function(ctx)
 
 	local STOP = 0x2
 	local STALL_SECONDS = 3 -- seconds a flight can stand still at the end before it is a wait for the server and not the landing
+	local MAX_STILL_SECONDS = 20 -- seconds a flight can stand still in one go before the game is seen as having lost it (stops along the way are a few seconds)
 
 	---@class FlightAnalysis
 	local Flight = {}
@@ -257,6 +258,23 @@ return function(ctx)
 			end
 		elseif early then
 			self.incomplete = early
+		end
+		-- a flight the game lost (a failed teleport or map load leaves us stuck while the taxi still goes on) does not tell how long the route takes
+		-- standing still at the very end is the wait for the server that `buildTimes` leaves out, so only what was followed by moving on counts
+		if not self.incomplete and count >= 2 then
+			local still, longest = 0, 0
+			for j = 2, count do
+				local step = self.steps[j]
+				if step and step.kind == "still" then
+					still = still + step.dt
+				else
+					longest = max(longest, still)
+					still = 0
+				end
+			end
+			if longest > MAX_STILL_SECONDS then
+				self.incomplete = format("stood still for %.0f sec in one go during the flight, the game lost it", longest)
+			end
 		end
 		-- the game not responding for a while (loading, lag) leaves a hole in what we saw
 		local gap = 0

@@ -35,6 +35,7 @@ return function(ctx)
 	local PATH_MIN_NET_SECONDS = 1 -- seconds all of the flights on a taxi map must get closer to how long they took for a speed of a path to be suggested
 	local PATH_MIN_SEEN = 0.6 -- how much of a path must have been seen in flight for it to be given speeds of its own
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
+	local PATH_CONFIRMED_SECONDS = 2 -- the same, for a path that two or more flights agree on (all of them flew it at the same speeds, and each is this far off the same way)
 	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
 	local JOIN_MIN_SECONDS = 3 -- seconds a flight must get closer to its estimate before another way of flying past a taxi node is suggested
 	local RAMP_MIN_SECONDS = 0.25 -- seconds the flights must get closer to their estimates on average before other speeds for taking off and landing are suggested
@@ -213,6 +214,23 @@ return function(ctx)
 			end
 		end
 		return true
+	end
+
+	-- If two flights flew a path at the same speeds, going by the points both of them have a speed for.
+	---@param a table<number, number>
+	---@param b table<number, number>
+	---@return boolean
+	local function agreeSpread(a, b)
+		local common = 0
+		for point, speed in pairs(a) do
+			if b[point] ~= nil then
+				if b[point] ~= speed then
+					return false
+				end
+				common = common + 1
+			end
+		end
+		return common > 0
 	end
 
 	---@param speeds number[]
@@ -773,6 +791,55 @@ return function(ctx)
 			-- the paths that are off by more than a few seconds with the speeds of the taxi map need their own speeds
 			local savedPaths = lib.Sim.PATH_SPEEDS
 			lib.Sim.PATH_SPEEDS = {}
+
+			-- a few seconds off on one flight can be anything, but when two or more flights flew a path at the same speeds and each is off the same way it is the path
+			local confirmed = {} ---@type table<number, boolean>
+			local onMap = {} ---@type table<number, boolean> The paths the flights of this taxi map flew.
+			do
+				local seenOn = {} ---@type table<number, { gain: number, spread: table<number, number> }[]>
+				for _, flight in ipairs(flights) do
+					local without = lib.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
+					if without then
+						local byPath = {} ---@type table<number, { interval: table, step: table }[]>
+						for i, interval in ipairs(flight.intervals) do
+							byPath[interval.path] = byPath[interval.path] or {}
+							table.insert(byPath[interval.path], { interval = interval, step = without.steps[i] })
+						end
+						for path, flown in pairs(flight.analysis:observe()) do
+							local stretches = byPath[path]
+							if stretches then
+								onMap[path] = true
+								local observed, predicted, seenYards, totalYards = 0, 0, 0, 0
+								for _, stretch in ipairs(stretches) do
+									totalYards = totalYards + stretch.interval.yards
+									if stretch.interval.speed then
+										seenYards = seenYards + stretch.interval.yards
+										observed = observed + stretch.interval.yards / (stretch.interval.speed * scale)
+										predicted = predicted + (stretch.step and stretch.step.distance / stretch.step.speed or 0)
+									end
+								end
+								if totalYards == 0 or seenYards >= totalYards * PATH_MIN_SEEN then
+									seenOn[path] = seenOn[path] or {}
+									table.insert(seenOn[path], {
+										gain = (predicted - observed) * (seenYards > 0 and totalYards / seenYards or 1),
+										spread = spreadSpeeds(flown.speeds, flown.first, flown.last),
+									})
+								end
+							end
+						end
+					end
+				end
+				for path, list in pairs(seenOn) do
+					local agree = #list >= 2
+					for i = 1, #list do
+						if abs(list[i].gain) < PATH_CONFIRMED_SECONDS or (list[i].gain > 0) ~= (list[1].gain > 0) or not agreeSpread(list[1].spread, list[i].spread) then
+							agree = false
+						end
+					end
+					confirmed[path] = agree
+				end
+			end
+
 			for _, flight in ipairs(flights) do
 				local a = flight.analysis
 				local without = lib.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
@@ -849,7 +916,7 @@ return function(ctx)
 									end
 								end
 								local uniform = not whole and numDistinct == 1 and (flown.last - flown.first + 1) >= count * PATH_MIN_SEEN
-								if abs(gain) < PATH_MIN_SECONDS then
+								if abs(gain) < (confirmed[path] and PATH_CONFIRMED_SECONDS or PATH_MIN_SECONDS) then
 									if had and whole then
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
@@ -923,7 +990,8 @@ return function(ctx)
 			end
 			for _, path in ipairs(pathOrder) do
 				local new = pathNew[path]
-				if new ~= nil and pathLines[path] then
+				-- only the flights of this taxi map say if a path they flew is better with it, the lines of the paths of other taxi maps are for those to judge
+				if new ~= nil and pathLines[path] and onMap[path] then
 					local before = secondsOff()
 					local restore = override(lib.Sim, "PATH_SPEEDS", path, new or nil)
 					local after = secondsOff()

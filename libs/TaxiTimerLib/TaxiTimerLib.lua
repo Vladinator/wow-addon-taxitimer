@@ -49,19 +49,11 @@ end
 ---@field public taxipath TaxiTimerLib-1.0_TaxiPathRowChunks
 ---@field public taxipathnode TaxiTimerLib-1.0_TaxiPathNodeRowChunks
 
---
--- The simulation: what the `sim_` file of a game has, on top of what the database says. Its tables are described by the `sim_` files.
---
-
 ---@class TaxiTimerLib-1.0_Sim
 
 ---@class TaxiTimerLib-1.0_TaxiAreaRamp
 ---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
 ---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
-
---
--- Points and routes
---
 
 ---@class TaxiTimerLib-1.0_Point
 ---@field x number
@@ -128,6 +120,8 @@ end
 -- MARK: Catmull–Rom
 --
 
+---@param base number
+---@param exponent number
 local function pow(base, exponent)
 	return base ^ exponent
 end
@@ -282,7 +276,8 @@ end
 -- A point sharing the position of the point before it is where that point is.
 ---@param path TaxiTimerLib-1.0_Point[]
 ---@param ignoreHeight? boolean `true` to leave out the height of the points
----@return TaxiTimerLib-1.0_Point[] curve, number[] starts `starts[i]` is the index in `curve` of `path[i]`. What is flown from `path[i]` to `path[i + 1]` are the points from `starts[i]` up to `starts[i + 1]`.
+---@return TaxiTimerLib-1.0_Point[] curve
+---@return number[] starts `starts[i]` is the index in `curve` of `path[i]`. What is flown from `path[i]` to `path[i + 1]` are the points from `starts[i]` up to `starts[i + 1]`.
 function lib.CatmullPath(path, ignoreHeight)
 	local curve = {} ---@type TaxiTimerLib-1.0_Point[]
 	local starts = {} ---@type number[]
@@ -359,7 +354,7 @@ lib.TAXI_SPEED_FALLBACK = TAXI_SPEED_FALLBACK
 
 -- Returns the speed the taxi map is flown at.
 ---@param areaID? number
----@return number
+---@return number speed
 function lib.Speed(areaID)
 	local areaSpeeds = lib.Sim.AREA_SPEEDS
 	local speed = areaID and areaSpeeds and areaSpeeds[areaID]
@@ -496,12 +491,12 @@ end
 
 local MAX_BRIDGE_HOPS = 4 -- paths a trip between two taxi nodes can be made of when the game does not tell us the taxi nodes in between
 local bridges = {} ---@type table<number, table<number, number[]|false>> `[from][to] = taxi nodes` of the trip from one taxi node to the other, including both
-local neighbours = {} ---@type table<number, number[]> The taxi nodes there is a path to from a taxi node, in rising order.
+local neighbors = {} ---@type table<number, number[]> The taxi nodes there is a path to from a taxi node, in rising order.
 
 ---@param nodeId number
----@return number[]
-local function GetNeighbours(nodeId)
-	local list = neighbours[nodeId]
+---@return number[] nodeIds
+local function GetNeighbors(nodeId)
+	local list = neighbors[nodeId]
 
 	if not list then
 		list = {}
@@ -511,7 +506,7 @@ local function GetNeighbours(nodeId)
 		end
 
 		table.sort(list) -- the same trip in every version of Lua
-		neighbours[nodeId] = list
+		neighbors[nodeId] = list
 	end
 
 	return list
@@ -545,7 +540,7 @@ local function GetTaxiBridge(from, to)
 		head = head + 1
 
 		if depth[current] < MAX_BRIDGE_HOPS and current ~= to then
-			local list = GetNeighbours(current)
+			local list = GetNeighbors(current)
 
 			for i = 1, #list do
 				local nextId = list[i]
@@ -751,15 +746,20 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 end
 
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[]
----@return TaxiTimerLib-1.0_TaxiPathNode[] points, TaxiTimerLib-1.0_FlightSegment[] segments, number delay
+---@return TaxiTimerLib-1.0_TaxiPathNode[] points
+---@return TaxiTimerLib-1.0_FlightSegment[] segments
+---@return number delay
+---@return (number|false)[] arrivals `arrivals[i]` is the id of the last path flown to get to `nodes[i + 1]` (`false` if no path is known to it).
 function lib.GetPointsFromNodes(nodes)
 	local paths = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[][]
 	local nodeIds = {} ---@type number[]
 	local fromIds = {} ---@type number[]
+	local arrivals = {} ---@type (number|false)[]
 
 	for i = 2, #nodes do
 		local from, to = nodes[i - 1], nodes[i]
 		local path = GetTaxiPath(from.nodeID, to.nodeID)
+		local numBefore = #paths
 
 		if path and path[1] then
 			paths[#paths + 1] = path
@@ -779,6 +779,9 @@ function lib.GetPointsFromNodes(nodes)
 				end
 			end
 		end
+
+		local arrival = paths[#paths]
+		arrivals[i - 1] = #paths > numBefore and arrival[1].pathId or false
 	end
 
 	local points = JoinTaxiPaths(paths, nodeIds, fromIds)
@@ -803,7 +806,7 @@ function lib.GetPointsFromNodes(nodes)
 		end
 	end
 
-	return points, segments, delay
+	return points, segments, delay, arrivals
 end
 
 -- Returns the speed a path is flown at from the given point, if the path has its own speeds.
@@ -911,6 +914,7 @@ end
 ---@field public points TaxiTimerLib-1.0_TaxiPathNode[]
 ---@field public segments TaxiTimerLib-1.0_FlightSegment[]
 ---@field public delay number The seconds the paths say the flight waits at stops along the way.
+---@field public arrivals (number|false)[] `arrivals[i]` is the id of the last path flown to get to `nodes[i + 1]`.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public distance number The yards flown.
 ---@field public distance2D number The yards flown as seen from above (without climbing and descending).
@@ -930,15 +934,16 @@ end
 ---@field public dynamicSpeed boolean If the speed changes during the flight (the speed we fly at then says nothing about the rest of the flight).
 ---@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at (with the `speedModifier`).
 ---@field public speedModifier number What every speed of the flight was multiplied by (1 if nothing makes the flight path mount fly faster or slower).
+---@field public arrivals (number|false)[] See `TaxiTimerLib-1.0_FlightGeometry`.
 ---@field public donotadjustarrivaltime? boolean
 
 local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
 
 -- Returns the points a flight goes through and how far it is between them.
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
----@return TaxiTimerLib-1.0_FlightGeometry
+---@return TaxiTimerLib-1.0_FlightGeometry flightGeometry
 function lib.GetFlightGeometry(nodes)
-	local points, segments, delay = lib.GetPointsFromNodes(nodes)
+	local points, segments, delay, arrivals = lib.GetPointsFromNodes(nodes)
 	local maps = {} ---@type table<number, boolean>
 	local distance = 0
 	local distance2D = 0
@@ -961,6 +966,7 @@ function lib.GetFlightGeometry(nodes)
 		points = points,
 		segments = segments,
 		delay = delay,
+		arrivals = arrivals,
 		maps = maps,
 		distance = distance,
 		distance2D = distance2D,
@@ -971,7 +977,7 @@ end
 ---@param geometry TaxiTimerLib-1.0_FlightGeometry
 ---@param areaID? number
 ---@param speedModifier? number What the speeds are multiplied by for something that makes the flight path mount fly faster or slower (1.2 for 20% faster), the game side knows what that is.
----@return TaxiTimerLib-1.0_FlightInfo?
+---@return TaxiTimerLib-1.0_FlightInfo? flightInfo
 function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 	local modifier = speedModifier and speedModifier > 0 and speedModifier or 1
 	local areaSpeed = lib.Speed(areaID)
@@ -1057,6 +1063,7 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 			dynamicSpeed = isDynamic,
 			areaSpeed = areaSpeed,
 			speedModifier = modifier,
+			arrivals = geometry.arrivals,
 		}
 
 		if INCLUDE_STOP_DELAYS then
@@ -1073,7 +1080,7 @@ end
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@param areaID? number
 ---@param speedModifier? number See `GetFlightInfoFromGeometry`.
----@return TaxiTimerLib-1.0_FlightInfo?
+---@return TaxiTimerLib-1.0_FlightInfo? flightInfo
 function lib.GetFlightInfoFromNodes(nodes, areaID, speedModifier)
 	return lib.GetFlightInfoFromGeometry(lib.GetFlightGeometry(nodes), areaID, speedModifier)
 end
@@ -1094,4 +1101,84 @@ function lib.GetFlightTimeLeft(info, distance)
 	end
 
 	return 0
+end
+
+--
+-- MARK: Flight checkpoints
+--
+
+-- Where a flight reaches a taxi node of its route.
+---@class TaxiTimerLib-1.0_FlightCheckpoint
+---@field public nodeID number
+---@field public name? string
+---@field public lands boolean If the flight lands at the taxi node (the first and last of the route), `false` where it passes the taxi node without landing.
+---@field public pointIndex number The index in `info.points` of the point flown at the taxi node.
+---@field public distance number The yards flown when it is reached.
+---@field public time number The seconds flown when it is reached, going by the speeds of the flight.
+
+-- Returns where the flight reaches each taxi node of its route, to show the progress of the flight.
+-- The first is at 0 yards and 0 seconds, the last at `info.distance` and `info.duration`.
+-- A taxi node of the route that the flight does not fly through (the game skips the points near it) is where the flight is closest to it, which is the point before it.
+---@param info TaxiTimerLib-1.0_FlightInfo
+---@return TaxiTimerLib-1.0_FlightCheckpoint[] checkpoints
+function lib.GetFlightCheckpoints(info)
+	local points, segments, steps, nodes = info.points, info.segments, info.steps, info.nodes
+	local numPoints = #points
+
+	-- the yards and seconds flown when each point is reached, there is no step between where a segment ends and the next begins
+	local distances, times = {}, {} ---@type number[], number[]
+	local distance, time = 0, 0
+	local numPoint, numStep = 0, 0
+
+	for i = 1, #segments do
+		for j = 1, #segments[i].points do
+			numPoint = numPoint + 1
+			distances[numPoint], times[numPoint] = distance, time
+
+			if j < #segments[i].points then
+				numStep = numStep + 1
+				local step = steps[numStep]
+				distance = distance + step.distance
+				time = time + step.distance / step.speed
+			end
+		end
+	end
+
+	-- the last point of the path that goes to each node, looking on from where the node before was
+	local checkpoints = {} ---@type TaxiTimerLib-1.0_FlightCheckpoint[]
+	local from = 1
+
+	for i = 1, #nodes do
+		local index = from
+
+		if i == 1 then
+			index = 1
+		elseif i == #nodes then
+			index = numPoints
+		else
+			local pathId = info.arrivals[i - 1]
+
+			local found = false
+
+			for j = from, numPoints do
+				if points[j].pathId == pathId then
+					index, found = j, true
+				elseif found then
+					break
+				end
+			end
+		end
+
+		from = index
+		checkpoints[i] = {
+			nodeID = nodes[i].nodeID,
+			name = nodes[i].name,
+			lands = i == 1 or i == #nodes,
+			pointIndex = index,
+			distance = distances[index] or 0,
+			time = times[index] or 0,
+		}
+	end
+
+	return checkpoints
 end
