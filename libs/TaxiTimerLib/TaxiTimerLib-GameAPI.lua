@@ -14,11 +14,24 @@ local api = {} ---@class TaxiTimerLib-1.0_GameAPI
 ---@field public nodes table<number, TaxiNodeInfo> The taxi nodes of the taxi map by slot, which is what the routes of the game are made of.
 ---@field public otherNodes table<number, TaxiNodeInfo> The taxi nodes by slot of the other taxi map that is shown, for the slots `nodes` does not have.
 ---@field public otherMaps table<number, boolean> The taxi maps `otherNodes` was filled from.
+---@field public shown table<number, boolean> The ids of the taxi nodes of `nodes` and `otherNodes`, which are the ones the taxi map shows.
 ---@field public otherConflict? boolean If the slots of another taxi map are not the same as the ones of the taxi map we are on, so they can not be used.
 
 -- The taxi map as it was last looked at.
-api.TaxiMap = { nodes = {}, otherNodes = {}, otherMaps = {} } ---@type TaxiTimerLib-1.0_TaxiMap
+api.TaxiMap = { nodes = {}, otherNodes = {}, otherMaps = {}, shown = {} } ---@type TaxiTimerLib-1.0_TaxiMap
 local TaxiMap = api.TaxiMap
+
+-- Makes `TaxiMap.shown` match the taxi nodes that are known now, which is the same table every time so a route does not have to make one.
+local function UpdateShown()
+	local shown = TaxiMap.shown
+	table.wipe(shown)
+	for _, node in pairs(TaxiMap.nodes) do
+		shown[node.nodeID] = true
+	end
+	for _, node in pairs(TaxiMap.otherNodes) do
+		shown[node.nodeID] = true
+	end
+end
 
 -- Checks if the taxi map is known, and the taxi node the player is at.
 ---@return boolean
@@ -46,21 +59,20 @@ function api.UpdateTaxiMap(forceUpdate)
 	TaxiMap.otherConflict = nil
 
 	if not areaID then
+		UpdateShown()
 		return true
 	end
 
 	local nodes = C_TaxiMap.GetAllTaxiNodes(areaID)
-
 	for i = 1, #nodes do
 		local node = nodes[i]
-
 		if node.state == Enum.FlightPathState.Current then
 			TaxiMap.from = node
 		end
-
 		TaxiMap.nodes[node.slotIndex] = node
 	end
 
+	UpdateShown()
 	return true
 end
 
@@ -77,7 +89,6 @@ local function AddShownTaxiMap()
 	TaxiMap.otherMaps[mapID] = true
 
 	local nodes = C_TaxiMap.GetAllTaxiNodes(mapID)
-
 	for i = 1, #nodes do
 		local node = nodes[i]
 		local known = TaxiMap.nodes[node.slotIndex]
@@ -86,6 +97,7 @@ local function AddShownTaxiMap()
 			-- the slots mean something else on the other taxi map, so none of them can be used
 			table.wipe(TaxiMap.otherNodes)
 			TaxiMap.otherConflict = true
+			UpdateShown()
 			return
 		end
 
@@ -93,6 +105,8 @@ local function AddShownTaxiMap()
 			TaxiMap.otherNodes[node.slotIndex] = node
 		end
 	end
+
+	UpdateShown()
 end
 
 -- Returns the taxi node of a slot of the taxi map.
@@ -135,14 +149,14 @@ end
 -- MARK: Flight information
 --
 
--- Asks the game for the route to the taxi node and returns what the flight is estimated to be like.
+-- Asks the game for the route to the taxi node and returns the taxi nodes of it that the taxi map shows, with the start and the destination.
 ---@param to? TaxiNodeInfo The taxi node to fly to.
 ---@param from? TaxiNodeInfo The taxi node to fly from, the one the player is at if there is none.
----@param areaID? number The taxi map to use the speed of, the taxi map that is open if there is none.
----@return TaxiTimerLib-1.0_FlightInfo?
-function api.GetFlightInfoToNode(to, from, areaID)
+---@return TaxiTimerLib-1.0_TaxiRouteNode[]? nodes
+---@return number? numRoutes How many flights the game says the route is made of, which includes the ones to taxi nodes that are not shown.
+---@return table<number, boolean>? shown The ids of the taxi nodes the taxi map shows.
+function api.GetRouteNodes(to, from)
 	from = from or TaxiMap.from
-	areaID = areaID or TaxiMap.areaID
 
 	if not from or not to or from == to then
 		return
@@ -201,7 +215,22 @@ function api.GetFlightInfoToNode(to, from, areaID)
 		nodes[#nodes + 1] = to
 	end
 
-	return lib.GetFlightInfoFromNodes(nodes, areaID, api.GetSpeedModifier())
+	-- the taxi nodes the taxi map shows, a taxi node in between that is not one of them is one the game does not show (like one that is phased out)
+	return nodes, numRoutes, TaxiMap.shown
+end
+
+-- Asks the game for the route to the taxi node and returns what the flight is estimated to be like.
+---@param to? TaxiNodeInfo The taxi node to fly to.
+---@param from? TaxiNodeInfo The taxi node to fly from, the one the player is at if there is none.
+---@param areaID? number The taxi map to use the speed of, the taxi map that is open if there is none.
+---@return TaxiTimerLib-1.0_FlightInfo?
+function api.GetFlightInfoToNode(to, from, areaID)
+	local nodes, _, shown = api.GetRouteNodes(to, from)
+	if not nodes then
+		return
+	end
+	local faction = UnitFactionGroup("player")
+	return lib.GetFlightInfoFromNodes(nodes, areaID or TaxiMap.areaID, api.GetSpeedModifier(), shown, faction)
 end
 
 -- Returns what the flight to a slot of the taxi map is estimated to be like.

@@ -14,6 +14,15 @@ end
 ---@alias TaxiTimerLib-1.0_GameFlavor "mainline"|"forever"|"vanilla"|"classic"
 
 ---@class TaxiTimerLib-1.0_TaxiNodesStruct
+---@field public ID 1
+---@field public FLAGS 2 `TAXINODEFLAGS`
+
+-- The bits of the flags of a taxi node, they are made when the db is made as the csv files of each game are not the same.
+---@class TaxiTimerLib-1.0_TaxiNodeFlagsStruct
+---@field public ALLIANCE number Usable by Alliance.
+---@field public HORDE number Usable by Horde.
+---@field public HIDDEN number Hidden from the map, but can be passed through.
+---@field public PASS number Hidden from the map as a valid landing destination, but can be passed through.
 
 ---@class TaxiTimerLib-1.0_TaxiPathStruct
 ---@field public ID 1
@@ -30,6 +39,12 @@ end
 ---@field public FLAGS 7
 ---@field public DELAY 8
 
+-- A row of `lib.DB.taxinodes` where the columns are indexed using `lib.DB.TAXINODES`.
+---@alias TaxiTimerLib-1.0_TaxiNodesRow { [1]: number, [2]: number }
+
+-- The rows of `lib.DB.taxinodes` split up into chunks.
+---@alias TaxiTimerLib-1.0_TaxiNodesRowChunks table<number, TaxiTimerLib-1.0_TaxiNodesRow[]>
+
 -- A row of `lib.DB.taxipath` where the columns are indexed using `lib.DB.TAXIPATH`.
 ---@alias TaxiTimerLib-1.0_TaxiPathRow { [1]: number, [2]: number, [3]: number }
 
@@ -44,8 +59,10 @@ end
 
 ---@class TaxiTimerLib-1.0_DB
 ---@field public TAXINODES TaxiTimerLib-1.0_TaxiNodesStruct
+---@field public TAXINODEFLAGS TaxiTimerLib-1.0_TaxiNodeFlagsStruct
 ---@field public TAXIPATH TaxiTimerLib-1.0_TaxiPathStruct
 ---@field public TAXIPATHNODE TaxiTimerLib-1.0_TaxiPathNodeStruct
+---@field public taxinodes TaxiTimerLib-1.0_TaxiNodesRowChunks
 ---@field public taxipath TaxiTimerLib-1.0_TaxiPathRowChunks
 ---@field public taxipathnode TaxiTimerLib-1.0_TaxiPathNodeRowChunks
 
@@ -73,6 +90,7 @@ end
 -- It is often `TaxiNodeInfo` type if you inspect the table (since it also contains what we need), but we can't guarantee that, especially when running the lib outside of the game.
 ---@alias TaxiTimerLib-1.0_TaxiRouteNode { nodeID: number, name?: string }
 
+
 --
 -- MARK: Internals
 --
@@ -90,7 +108,7 @@ lib.GameAPI = lib.GameAPI or nil ---@type TaxiTimerLib-1.0_GameAPI
 ---@param db TaxiTimerLib-1.0_DB
 ---@param incomingMinor number The `MINOR` of the files the database is from, the database is left out if it is not the version of this library.
 function lib.SetDatabase(db, incomingMinor)
-	assert(type(db) == "table" and type(db.TAXINODES) == "table" and type(db.TAXIPATH) == "table" and type(db.TAXIPATHNODE) == "table" and type(db.taxipath) == "table" and type(db.taxipathnode) == "table", 'TaxiTimerLib-1.0 "SetDatabase" expected a database table.')
+	assert(type(db) == "table" and type(db.TAXINODES) == "table" and type(db.TAXINODEFLAGS) == "table" and type(db.TAXIPATH) == "table" and type(db.TAXIPATHNODE) == "table" and type(db.taxinodes) == "table" and type(db.taxipath) == "table" and type(db.taxipathnode) == "table", 'TaxiTimerLib-1.0 "SetDatabase" expected a database table.')
 	assert(type(incomingMinor) == "number", 'TaxiTimerLib-1.0 "SetDatabase" expected the "MINOR" of the files as the second argument.')
 	if incomingMinor ~= MINOR then return end
 	lib.DB = db
@@ -384,6 +402,7 @@ local RETRACE_REACH = 250 -- yards (seen from above) the stretch must reach away
 local RETRACE_POINTS = 4 -- points of each of the two paths that must run alongside the other before that stretch is skipped, fewer are left to the skip distance above
 
 local hasLookup = false
+local nodeRows = {} ---@type table<number, TaxiTimerLib-1.0_TaxiNodesRow> `[nodeId] = row`
 local pathLookup = {} ---@type table<number, table<number, number>> `[from][to] = pathId`
 local pathRows = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNodeRow[]> `[pathId] = rows` in flight order
 local pathNodes = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNode[]|false>
@@ -391,6 +410,15 @@ local pathNodes = {} ---@type table<number, TaxiTimerLib-1.0_TaxiPathNode[]|fals
 -- the db is only walked once, the first time we need a path
 local function BuildLookup()
 	hasLookup = true
+
+	for i = 1, #lib.DB.taxinodes do
+		local taxiNodeChunk = lib.DB.taxinodes[i]
+
+		for j = 1, #taxiNodeChunk do
+			local taxiNode = taxiNodeChunk[j]
+			nodeRows[taxiNode[lib.DB.TAXINODES.ID]] = taxiNode
+		end
+	end
 
 	for i = 1, #lib.DB.taxipath do
 		local taxiPathChunk = lib.DB.taxipath[i]
@@ -511,17 +539,48 @@ local function GetNeighbors(nodeId)
 	return list
 end
 
+-- If a trip between two taxi nodes can pass a taxi node that the game did not give as part of the route, going by what the game files say about it (see `TAXINODEFLAGS`): it has to be for the faction of the player and be one that a flight passes.
+-- A taxi node that is only there for the ones that pass its condition would have been given, or is not in the game for the player.
+---@param nodeId number
+---@param faction? string The faction of the player, "Alliance" or "Horde".
+---@return boolean
+local function CanBePassed(nodeId, faction)
+	local row = nodeRows[nodeId]
+
+	if not row then
+		return true
+	end
+
+	local flags, nodeFlags = row[lib.DB.TAXINODES.FLAGS], lib.DB.TAXINODEFLAGS
+
+	if not HasFlag(flags, nodeFlags.PASS) then
+		return false
+	end
+
+	local alliance, horde = HasFlag(flags, nodeFlags.ALLIANCE), HasFlag(flags, nodeFlags.HORDE)
+
+	-- neutral is for both, and one that has neither is undefined, which keeps no faction out
+	if alliance == horde then
+		return true
+	end
+
+	return faction == "Alliance" and alliance or faction == "Horde" and horde or not faction
+end
+
 -- Some taxi nodes are never shown on the taxi map, they are only passed on the way (like the tunnels into Zaralek Cavern), so a trip can have taxi nodes in between that the game does not give us.
 -- When there is no path between two taxi nodes, this finds the trip with the fewest paths that does it, and only if there is one such trip. Every path of it is one of the paths of the game files.
+-- A taxi node the taxi map shows is not passed on a trip, as the game gives the ones it shows (a taxi node that is phased out is not shown, and the trip can pass that).
 ---@param from number
 ---@param to number
+---@param shown? table<number, boolean> The ids of the taxi nodes the taxi map shows.
+---@param faction? string The faction of the player ("Alliance" or "Horde").
 ---@return number[]? nodeIds The taxi nodes of the trip in the order they are flown, `from` and `to` included.
-local function GetTaxiBridge(from, to)
+local function GetTaxiBridge(from, to, shown, faction)
 	if not hasLookup then
 		BuildLookup()
 	end
 
-	local cached = bridges[from]
+	local cached = not shown and not faction and bridges[from] or nil
 
 	if cached and cached[to] ~= nil then
 		return cached[to] or nil
@@ -544,15 +603,18 @@ local function GetTaxiBridge(from, to)
 			for i = 1, #list do
 				local nextId = list[i]
 
-				if depth[nextId] == nil then
-					previous[nextId] = current
-					depth[nextId] = depth[current] + 1
-					trips[nextId] = 0
-					queue[#queue + 1] = nextId
-				end
+				-- the game shows it (so it would have given it), or the game files say it is not part of a trip, so it is not
+				if nextId == to or not (shown and shown[nextId] or not CanBePassed(nextId, faction)) then
+					if depth[nextId] == nil then
+						previous[nextId] = current
+						depth[nextId] = depth[current] + 1
+						trips[nextId] = 0
+						queue[#queue + 1] = nextId
+					end
 
-				if depth[nextId] == depth[current] + 1 then
-					trips[nextId] = trips[nextId] + trips[current]
+					if depth[nextId] == depth[current] + 1 then
+						trips[nextId] = trips[nextId] + trips[current]
+					end
 				end
 			end
 		end
@@ -572,13 +634,87 @@ local function GetTaxiBridge(from, to)
 		end
 	end
 
-	if not cached then
-		cached = {}
-		bridges[from] = cached
+	if not shown and not faction then
+		cached = bridges[from]
+
+		if not cached then
+			cached = {}
+			bridges[from] = cached
+		end
+
+		cached[to] = trip
 	end
 
-	cached[to] = trip
 	return trip or nil
+end
+
+-- Every trip with the fewest paths from one taxi node to another, to show why a trip between two taxi nodes is not found (at most 8 of them).
+---@param from number
+---@param to number
+---@return number[][] trips Each is the taxi nodes in the order they are flown, `from` and `to` included. A trip of two is a path between them.
+function lib.GetBridgeCandidates(from, to)
+	if not hasLookup then
+		BuildLookup()
+	end
+
+	local depth = { [from] = 0 } ---@type table<number, number>
+	local parents = {} ---@type table<number, number[]>
+	local queue = { from }
+	local head = 1
+
+	while head <= #queue do
+		local current = queue[head]
+		head = head + 1
+
+		if depth[current] < MAX_BRIDGE_HOPS and current ~= to then
+			local list = GetNeighbors(current)
+
+			for i = 1, #list do
+				local nextId = list[i]
+
+				if depth[nextId] == nil then
+					depth[nextId] = depth[current] + 1
+					parents[nextId] = {}
+					queue[#queue + 1] = nextId
+				end
+
+				if depth[nextId] == depth[current] + 1 then
+					table.insert(parents[nextId], current)
+				end
+			end
+		end
+	end
+
+	local trips = {} ---@type number[][]
+
+	---@param at number
+	---@param tail number[] The taxi nodes after `at`.
+	local function Collect(at, tail)
+		if #trips >= 8 then
+			return
+		end
+
+		local trip = { at }
+
+		for i = 1, #tail do
+			trip[i + 1] = tail[i]
+		end
+
+		if at == from then
+			trips[#trips + 1] = trip
+			return
+		end
+
+		for _, parent in ipairs(parents[at] or {}) do
+			Collect(parent, trip)
+		end
+	end
+
+	if depth[to] then
+		Collect(to, {})
+	end
+
+	return trips
 end
 
 ---@param node TaxiTimerLib-1.0_TaxiPathNode
@@ -744,70 +880,6 @@ local function JoinTaxiPaths(paths, nodeIds, fromIds)
 	return points
 end
 
----@param nodes TaxiTimerLib-1.0_TaxiRouteNode[]
----@return TaxiTimerLib-1.0_TaxiPathNode[] points
----@return TaxiTimerLib-1.0_FlightSegment[] segments
----@return number delay
----@return (number|false)[] arrivals `arrivals[i]` is the id of the last path flown to get to `nodes[i + 1]` (`false` if no path is known to it).
-function lib.GetPointsFromNodes(nodes)
-	local paths = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[][]
-	local nodeIds = {} ---@type number[]
-	local fromIds = {} ---@type number[]
-	local arrivals = {} ---@type (number|false)[]
-
-	for i = 2, #nodes do
-		local from, to = nodes[i - 1], nodes[i]
-		local path = GetTaxiPath(from.nodeID, to.nodeID)
-		local numBefore = #paths
-
-		if path and path[1] then
-			paths[#paths + 1] = path
-			nodeIds[#paths] = to.nodeID
-			fromIds[#paths] = from.nodeID
-		elseif from.nodeID ~= to.nodeID then
-			-- no path between the two, so the game flew through taxi nodes it does not show
-			local trip = GetTaxiBridge(from.nodeID, to.nodeID) or {}
-
-			for j = 2, #trip do
-				local hop = GetTaxiPath(trip[j - 1], trip[j])
-
-				if hop and hop[1] then
-					paths[#paths + 1] = hop
-					nodeIds[#paths] = trip[j]
-					fromIds[#paths] = trip[j - 1]
-				end
-			end
-		end
-
-		local arrival = paths[#paths]
-		arrivals[i - 1] = #paths > numBefore and arrival[1].pathId or false
-	end
-
-	local points = JoinTaxiPaths(paths, nodeIds, fromIds)
-	local segments = {} ---@type TaxiTimerLib-1.0_FlightSegment[]
-	local segment ---@type TaxiTimerLib-1.0_FlightSegment?
-	local delay = 0
-
-	-- the points are split up where the flight doesn't fly from one point to the next (teleports and map changes)
-	for i = 1, #points do
-		local point = points[i]
-		local previous = points[i - 1]
-
-		if not segment or previous.map ~= point.map or IsTeleport(previous) then
-			segment = { points = {} }
-			segments[#segments + 1] = segment
-		end
-
-		segment.points[#segment.points + 1] = point
-
-		if IsStop(point) then
-			delay = delay + point.delay
-		end
-	end
-
-	return points, segments, delay, arrivals
-end
-
 -- Returns the speed a path is flown at from the given point, if the path has its own speeds.
 ---@param point TaxiTimerLib-1.0_TaxiPathNode
 ---@return number? speed
@@ -911,6 +983,7 @@ end
 ---@field public segments TaxiTimerLib-1.0_FlightSegment[]
 ---@field public delay number The seconds the paths say the flight waits at stops along the way.
 ---@field public arrivals (number|false)[] `arrivals[i]` is the id of the last path flown to get to `nodes[i + 1]`.
+---@field public trips table<number, number[]> `trips[i]` is the taxi nodes flown from `nodes[i]` to `nodes[i + 1]` where the game did not give the ones between them.
 ---@field public maps table<number, boolean> The maps the points are on.
 ---@field public distance number The yards flown.
 ---@field public distance2D number The yards flown as seen from above (without climbing and descending).
@@ -931,15 +1004,90 @@ end
 ---@field public areaSpeed number The speed the stretches without a speed of their own are flown at, which is the speed of the taxi map or the speed of the taxi node the flight starts at (with the `speedModifier`).
 ---@field public speedModifier number What every speed of the flight was multiplied by (1 if nothing makes the flight path mount fly faster or slower).
 ---@field public arrivals (number|false)[] See `TaxiTimerLib-1.0_FlightGeometry`.
+---@field public trips table<number, number[]> See `TaxiTimerLib-1.0_FlightGeometry`.
 ---@field public donotadjustarrivaltime? boolean
 
-local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
+---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[]
+---@param shown? table<number, boolean> The ids of the taxi nodes the taxi map shows. A trip does not pass one of them, as the game would have given it as part of the route.
+---@param faction? string The faction of the player ("Alliance" or "Horde"), a trip does not pass the taxi nodes only the other faction can use.
+---@param trips? table<number, number[]> `trips[i]` is the taxi nodes flown from `nodes[i]` to `nodes[i + 1]`, both included, as they were found when a flight was recorded. Those are used in place of looking for them.
+---@return TaxiTimerLib-1.0_TaxiPathNode[] points
+---@return TaxiTimerLib-1.0_FlightSegment[] segments
+---@return number delay
+---@return (number|false)[] arrivals `arrivals[i]` is the id of the last path flown to get to `nodes[i + 1]` (`false` if no path is known to it).
+---@return table<number, number[]> trips `trips[i]` is the taxi nodes flown from `nodes[i]` to `nodes[i + 1]` where the game did not give the ones between them.
+local function GetPointsFromNodes(nodes, shown, faction, trips)
+	local paths = {} ---@type TaxiTimerLib-1.0_TaxiPathNode[][]
+	local nodeIds = {} ---@type number[]
+	local fromIds = {} ---@type number[]
+	local arrivals = {} ---@type (number|false)[]
+	local found = {} ---@type table<number, number[]>
+
+	for i = 2, #nodes do
+		local from, to = nodes[i - 1], nodes[i]
+		local path = GetTaxiPath(from.nodeID, to.nodeID)
+		local numBefore = #paths
+
+		if path and path[1] then
+			paths[#paths + 1] = path
+			nodeIds[#paths] = to.nodeID
+			fromIds[#paths] = from.nodeID
+		elseif from.nodeID ~= to.nodeID then
+			-- no path between the two, so the game flew through taxi nodes it does not show
+			local trip = trips and trips[i - 1] or GetTaxiBridge(from.nodeID, to.nodeID, shown, faction) or {}
+
+			if #trip > 0 then
+				found[i - 1] = trip
+			end
+
+			for j = 2, #trip do
+				local hop = GetTaxiPath(trip[j - 1], trip[j])
+
+				if hop and hop[1] then
+					paths[#paths + 1] = hop
+					nodeIds[#paths] = trip[j]
+					fromIds[#paths] = trip[j - 1]
+				end
+			end
+		end
+
+		local arrival = paths[#paths]
+		arrivals[i - 1] = #paths > numBefore and arrival[1].pathId or false
+	end
+
+	local points = JoinTaxiPaths(paths, nodeIds, fromIds)
+	local segments = {} ---@type TaxiTimerLib-1.0_FlightSegment[]
+	local segment ---@type TaxiTimerLib-1.0_FlightSegment?
+	local delay = 0
+
+	-- the points are split up where the flight doesn't fly from one point to the next (teleports and map changes)
+	for i = 1, #points do
+		local point = points[i]
+		local previous = points[i - 1]
+
+		if not segment or previous.map ~= point.map or IsTeleport(previous) then
+			segment = { points = {} }
+			segments[#segments + 1] = segment
+		end
+
+		segment.points[#segment.points + 1] = point
+
+		if IsStop(point) then
+			delay = delay + point.delay
+		end
+	end
+
+	return points, segments, delay, arrivals, found
+end
 
 -- Returns the points a flight goes through and how far it is between them.
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
+---@param shown? table<number, boolean> See `GetPointsFromNodes`.
+---@param faction? string See `GetPointsFromNodes`.
+---@param trips? table<number, number[]> See `GetPointsFromNodes`.
 ---@return TaxiTimerLib-1.0_FlightGeometry flightGeometry
-function lib.GetFlightGeometry(nodes)
-	local points, segments, delay, arrivals = lib.GetPointsFromNodes(nodes)
+function lib.GetFlightGeometry(nodes, shown, faction, trips)
+	local points, segments, delay, arrivals, found = GetPointsFromNodes(nodes, shown, faction, trips)
 	local maps = {} ---@type table<number, boolean>
 	local distance = 0
 	local distance2D = 0
@@ -963,11 +1111,14 @@ function lib.GetFlightGeometry(nodes)
 		segments = segments,
 		delay = delay,
 		arrivals = arrivals,
+		trips = found,
 		maps = maps,
 		distance = distance,
 		distance2D = distance2D,
 	}
 end
+
+local INCLUDE_STOP_DELAYS = false -- if the seconds waiting at stops along the paths are added to the flight time (not confirmed that flights wait at these, so it's shown in the debug tooltip until it is)
 
 -- Returns what the flight is estimated to be like at the speeds the game flies the taxi map at.
 ---@param geometry TaxiTimerLib-1.0_FlightGeometry
@@ -1060,6 +1211,7 @@ function lib.GetFlightInfoFromGeometry(geometry, areaID, speedModifier)
 			areaSpeed = areaSpeed,
 			speedModifier = modifier,
 			arrivals = geometry.arrivals,
+			trips = geometry.trips,
 		}
 
 		if INCLUDE_STOP_DELAYS then
@@ -1076,9 +1228,12 @@ end
 ---@param nodes TaxiTimerLib-1.0_TaxiRouteNode[] The taxi nodes of the route in the order they are flown.
 ---@param areaID? number
 ---@param speedModifier? number See `GetFlightInfoFromGeometry`.
+---@param shown? table<number, boolean> See `GetPointsFromNodes`.
+---@param faction? string See `GetPointsFromNodes`.
+---@param trips? table<number, number[]> See `GetPointsFromNodes`.
 ---@return TaxiTimerLib-1.0_FlightInfo? flightInfo
-function lib.GetFlightInfoFromNodes(nodes, areaID, speedModifier)
-	return lib.GetFlightInfoFromGeometry(lib.GetFlightGeometry(nodes), areaID, speedModifier)
+function lib.GetFlightInfoFromNodes(nodes, areaID, speedModifier, shown, faction, trips)
+	return lib.GetFlightInfoFromGeometry(lib.GetFlightGeometry(nodes, shown, faction, trips), areaID, speedModifier)
 end
 
 -- Returns the seconds left of the flight when the given yards are left of it, going by the speed of each stretch.

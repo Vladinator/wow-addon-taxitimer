@@ -71,7 +71,7 @@ local FILE_NAMES = { taxinodes = { "taxinodes.csv", "TaxiNodes.csv" }, taxipath 
 
 -- the columns that are written to the db file, the addon relies on these (and on the order they have in the csv files)
 local FIELDS = {
-	taxinodes = {},
+	taxinodes = { ID = true, Flags = true }, -- the flags are not the ones of the csv file but what the library needs to know of the taxi node, see `NODE_FLAGS`
 	taxipath = { ID = true, FromTaxiNode = true, ToTaxiNode = true },
 	taxipathnode = { Loc_0 = true, Loc_1 = true, Loc_2 = true, ID = true, PathID = true, ContinentID = true, Flags = true, Delay = true },
 }
@@ -170,6 +170,68 @@ end
 local function toInt(value)
 	local number = tonumber(value) or 0
 	return number >= 0 and floor(number) or ceil(number)
+end
+
+-- What the library needs to know about a taxi node, as the bits of the flags of the taxi nodes in the db file (and as `TAXINODEFLAGS` in it, so the library does not have the numbers).
+-- The faction of a taxi node is in the first two: Alliance, Horde, neutral (both bits) or undefined (neither, there is nothing that says).
+local NODE_FLAGS = {
+	{ "ALLIANCE", 0x1 }, -- an Alliance player can use it
+	{ "HORDE", 0x2 }, -- a Horde player can use it
+	{ "HIDDEN", 0x4 }, -- the map shows it for neither faction, it is only passed on the way (or not in the game any more)
+	{ "PASS", 0x8 }, -- a flight can pass it without landing, which it can not if it is only a start or an end, or if it is only part of the game for the players that pass its condition
+}
+
+-- The flags of the taxi nodes in the csv files (`TaxiNodes.Flags`).
+local TAXI_NODE_ALLIANCE, TAXI_NODE_HORDE, TAXI_NODE_CONDITION, TAXI_NODE_END_POINT_ONLY = 0x1, 0x2, 0x8, 0x20
+
+---If the single bit is set in the flags, without bit operations that not all versions of Lua have.
+---@param flags number
+---@param bit number
+---@return boolean
+local function hasBit(flags, bit)
+	return flags % (bit * 2) >= bit
+end
+
+---How the flags of a taxi node of a game are made into `NODE_FLAGS`. The games can have their own, as the csv files of each differ.
+---@alias TaxiParserNodeRule fun(flags: number, mountHorde: number, mountAlliance: number): table<string, boolean>
+---@type table<string, TaxiParserNodeRule>
+local NODE_RULES = {}
+
+-- A taxi node the map shows is for the faction it is shown for (both is neutral). A taxi node the map does not show (the ones the game flies through that are phased out or never shown) is for the faction that has a mount for it (the first mount is the Horde, the second the Alliance), for both if it has both, and undefined if it has none.
+-- One that is only for the players that pass its condition, or only a start or an end, is not passed.
+function NODE_RULES.default(flags, mountHorde, mountAlliance)
+	local alliance, horde = hasBit(flags, TAXI_NODE_ALLIANCE), hasBit(flags, TAXI_NODE_HORDE)
+	local hidden = not alliance and not horde
+	if hidden then
+		alliance, horde = mountAlliance ~= 0, mountHorde ~= 0
+	end
+	return {
+		ALLIANCE = alliance,
+		HORDE = horde,
+		HIDDEN = hidden,
+		PASS = not hasBit(flags, TAXI_NODE_CONDITION) and not hasBit(flags, TAXI_NODE_END_POINT_ONLY),
+	}
+end
+
+---The taxi nodes as they are written to the db file: the id and the `NODE_FLAGS` of each.
+---@param nodes CsvTable
+---@param client string
+---@return CsvTable
+local function deriveNodes(nodes, client)
+	local rule = NODE_RULES[client] or NODE_RULES.default
+	local c = nodes.columns
+	local rows = {} ---@type string[][]
+	for _, row in ipairs(nodes.rows) do
+		local node = rule(toInt(row[c.Flags]), toInt(row[c.MountCreatureID_0]), toInt(row[c.MountCreatureID_1]))
+		local derived = 0
+		for _, flag in ipairs(NODE_FLAGS) do
+			if node[flag[1]] then
+				derived = derived + flag[2]
+			end
+		end
+		rows[#rows + 1] = { tostring(toInt(row[c.ID])), tostring(derived) }
+	end
+	return { headers = { "ID", "Flags" }, rows = rows, columns = { ID = 1, Flags = 2 } }
 end
 
 ---The value of a field as it is written in lua, numbers as they are and the rest in quotes.
@@ -281,6 +343,9 @@ function Parser:write(outfile, libMinor)
 	local items = {} ---@type table<string, string[]>
 	for _, name in ipairs(FILES) do
 		local data = self.db[name]
+		if data and name == "taxinodes" then
+			data = deriveNodes(data, self.client)
+		end
 		if data then
 			local selected = FIELDS[name]
 			local fields, index = {}, 0
@@ -294,6 +359,13 @@ function Parser:write(outfile, libMinor)
 			local list = concat(fields, ",\r\n\t")
 			local upper = name:upper()
 			lua[#lua + 1] = "\r\n" .. annotation(upper, false) .. "db." .. upper .. " = {\r\n\t" .. list .. (list ~= "" and "," or "-- TODO") .. "\r\n}"
+			if name == "taxinodes" then
+				local flags = {}
+				for _, flag in ipairs(NODE_FLAGS) do
+					flags[#flags + 1] = flag[1] .. " = " .. flag[2] .. ","
+				end
+				lua[#lua + 1] = "\r\n---@class " .. LIB_NAME .. "_TaxiNodeFlagsStruct\r\ndb.TAXINODEFLAGS = {\r\n\t" .. concat(flags, "\r\n\t") .. "\r\n}"
+			end
 
 			local rows = {}
 			for _, row in ipairs(data.rows) do

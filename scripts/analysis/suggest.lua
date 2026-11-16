@@ -34,8 +34,10 @@ return function(ctx)
 	local SPACING_MIN_SECONDS = 1 -- seconds the flights must get closer to their estimates on average before other speeds by length are suggested
 	local PATH_MIN_NET_SECONDS = 1 -- seconds all of the flights on a taxi map must get closer to how long they took for a speed of a path to be suggested
 	local PATH_MIN_SEEN = 0.6 -- how much of a path must have been seen in flight for it to be given speeds of its own
+	local AGREE_RAMP_POINTS = 3 -- points at each end of a path where two flights are allowed to have flown a speed that is a step apart (taking off and landing)
+	local AGREE_RAMP_SPEED = 10 -- the most they can be apart, in speed, at those points
 	local DISTANCE_SCALE_MIN_FLIGHTS = 3 -- flights on a taxi map without positions (an instance) before its distance is scaled
-	local DISTANCE_SCALE_MIN_SHARE = 0.01 -- how much longer or shorter than the simulation the flights take, as a share, before it is scaled
+	local DISTANCE_SCALE_MIN_SHARE = 0.02 -- how much longer or shorter than the simulation the flights take, as a share, before it is scaled
 	local PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
 	local PATH_CONFIRMED_SECONDS = 2 -- the same, for a path that two or more flights agree on (all of them flew it at the same speeds, and each is this far off the same way)
 	local JOIN_MIN_YARDS = 50 -- yards the distance the simulation flies must get closer to what a flight flew before another way of flying past a taxi node is suggested
@@ -214,16 +216,21 @@ return function(ctx)
 	---@param b table<number, number>
 	---@return boolean
 	local function agreeSpread(a, b)
-		local common = 0
-		for point, speed in pairs(a) do
+		local points = {}
+		for point in pairs(a) do
 			if b[point] ~= nil then
-				if b[point] ~= speed then
-					return false
-				end
-				common = common + 1
+				points[#points + 1] = point
 			end
 		end
-		return common > 0
+		table.sort(points)
+		for i, point in ipairs(points) do
+			-- the speed of taking off and landing is set by the time, so the point the game was at when it changed differs a point between flights, there it can be one step off
+			local atEnds = i <= AGREE_RAMP_POINTS or i > #points - AGREE_RAMP_POINTS
+			if abs(a[point] - b[point]) > (atEnds and AGREE_RAMP_SPEED or 0) then
+				return false
+			end
+		end
+		return #points > 0
 	end
 
 	---@param speeds number[]
@@ -363,7 +370,7 @@ return function(ctx)
 				for i, id in ipairs(a.record.route) do
 					nodes[i] = { nodeID = id }
 				end
-				local geometry = lib.GetFlightGeometry(nodes)
+				local geometry = lib.GetFlightGeometry(nodes, nil, nil, a.record.trips)
 				local info = lib.GetFlightInfoFromGeometry(geometry, a.record.area, a.record.speedModifier)
 				total = total + (info and abs(a.actual - a.jumpTime - info.duration) or 0)
 				yards = yards + (a.hasOverride and 0 or abs(a.travelled - geometry.distance))
@@ -467,9 +474,9 @@ return function(ctx)
 					nodes[i] = { nodeID = id }
 				end
 				lib.Sim.SKIP_RETRACED = true
-				local cutDistance = lib.GetFlightGeometry(nodes).distance
+				local cutDistance = lib.GetFlightGeometry(nodes, nil, nil, a.record.trips).distance
 				lib.Sim.SKIP_RETRACED = false
-				local wholeDistance = lib.GetFlightGeometry(nodes).distance
+				local wholeDistance = lib.GetFlightGeometry(nodes, nil, nil, a.record.trips).distance
 				lib.Sim.SKIP_RETRACED = true
 				if wholeDistance - cutDistance > 1 then
 					local saved = wholeDistance - cutDistance

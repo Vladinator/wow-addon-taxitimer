@@ -23,6 +23,7 @@ sim.AREA_SPEEDS = {
 	[1647] = 40, -- Shadowlands
 	[1922] = 50, -- Draenor
 	[2046] = 50, -- Zereth Mortis
+	[2055] = 50, -- Sepulcher of the First Ones (a raid, there are no positions)
 	[2057] = 50, -- Dragon Isles
 	[2149] = 25, -- The Nokhud Offensive
 	[2175] = 40, -- Zaralek Cavern
@@ -87,6 +88,7 @@ sim.SPEED_MODIFIERS = {
 -- Paths in `PATH_SPEEDS` and the speeds of `AREA_RAMPS` and `AREA_SPACING` still have their own speeds.
 sim.NODE_SPEEDS = {
 	[252] = 45, -- Wyrmrest Temple, Dragonblight
+	[653] = 20, -- Oasis of Vir'sar, Uldum
 }
 
 -- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
@@ -136,6 +138,10 @@ sim.PATH_SPEEDS = {
 	[8432] = { [1] = 10, [2] = 25, [3] = 40, [11] = 65, [13] = 100, [14] = 300, [16] = 250, [17] = 200, [18] = 100, [20] = 65, [22] = 40, [23] = 25 }, -- Tirna Vaal, Ardenweald > Oribos
 	[8557] = { [1] = 25, [2] = 35, [3] = 45, [4] = 70, [5] = 100, [8] = 300, [15] = 155, [16] = 60, [17] = 40, [18] = 25 }, -- Oribos > Tazavesh, the Veiled Market
 	[8558] = { [1] = 25, [2] = 50, [4] = 300, [11] = 100, [13] = 65, [14] = 50, [15] = 45, [16] = 25 }, -- Tazavesh, the Veiled Market > Oribos
+	[8655] = { [1] = 30, [2] = 40, [4] = 50, [10] = 40, [11] = 35 }, -- Pilgrim's Grace, Zereth Mortis > Haven, Zereth Mortis
+	[8673] = { [1] = 30, [2] = 40, [3] = 50, [4] = 40 }, -- Antecedent Isle, Zereth Mortis > Zovaal's Grasp, Zereth Mortis
+	[8674] = { [1] = 30, [2] = 40, [3] = 50, [4] = 40 }, -- Zovaal's Grasp, Zereth Mortis > Antecedent Isle, Zereth Mortis
+	[8684] = { [1] = 50, [3] = 40 }, -- Sepulcher Of The First Ones, Zereth Mortis > Sepulcher Overlook, Zereth Mortis
 	[9382] = { [1] = 25 }, -- Old Loamm Road, Ohn'ahran Plains > Old Loamm Road, Zaralek Cavern
 	[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
 	[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps

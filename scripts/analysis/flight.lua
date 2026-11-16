@@ -247,6 +247,25 @@ return function(ctx)
 		end
 	end
 
+	-- If the flight took as long as it takes to fly all of the route and not to a taxi node on the way, which is all there is to tell where it landed when the game gives no positions.
+	---@return boolean
+	function Flight:tookTheWholeRoute()
+		local info = self:replay()
+		if not info then
+			return false
+		end
+		local checkpoints = self.lib.GetFlightCheckpoints(info)
+		local actual = self.actual - self.jumpTime
+		local nearest, nearestDifference
+		for i, checkpoint in ipairs(checkpoints) do
+			local difference = abs(checkpoint.time - actual)
+			if not nearestDifference or difference < nearestDifference then
+				nearest, nearestDifference = i, difference
+			end
+		end
+		return nearest == #checkpoints
+	end
+
 	-- flights that did not go all the way to the destination must not be compared to the estimate
 	function Flight:checkComplete()
 		local r = self.record
@@ -267,7 +286,12 @@ return function(ctx)
 				self.warnings[#self.warnings + 1] = early .. " but it was on the last hop so the flight still went to the destination"
 			end
 		elseif early then
-			self.incomplete = early
+			-- without positions the time it took says if we landed at the destination or at a taxi node before it
+			if self.noPosition and self:tookTheWholeRoute() then
+				self.warnings[#self.warnings + 1] = early .. " but the flight took as long as all of the route, so it still went to the destination"
+			else
+				self.incomplete = early
+			end
 		end
 		if self.noPosition and not self.incomplete then
 			self.warnings[#self.warnings + 1] = "the game gave no positions (an instance), so only the time and the speed are used, and that the flight went all the way to the destination can not be checked"
@@ -591,7 +615,7 @@ return function(ctx)
 			for i, id in ipairs(self.record.route or {}) do
 				nodes[i] = { nodeID = id }
 			end
-			local geometry = self.lib.GetFlightGeometry(nodes)
+			local geometry = self.lib.GetFlightGeometry(nodes, nil, nil, self.record.trips)
 			self._geometry = #geometry.points > 0 and geometry or false
 		end
 		return self._geometry or nil

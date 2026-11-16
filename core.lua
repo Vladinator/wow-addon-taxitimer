@@ -207,16 +207,18 @@ local Visualization do
 		details = true, -- bar with time left and visualization of the checkpoints along the way and progress
 	}
 
+	-- `CreateFrames` makes all of these together, so while `frame` exists so do they and the code that runs with a frame does not nil-check them.
+	-- The ones that can be missing (the atlas textures of the spark and the flash) are nilable, and are checked where they are used.
 	local frame ---@type VisualizationFrame?
 	local fill ---@type StatusBar
 	local label ---@type FontString
 	local delta ---@type FontString How far the flight is from the simulation when debugging, beside the bar so it does not move the time.
 	local isOff = false -- if the delta is shown, which it stays at until the flight is close to the simulation again so it does not come and go
 	local clockNotch ---@type VisualizationNotch The notch of the clock, when debugging.
-	local spark ---@type Texture The edge of the fill.
-	local sparkGlow ---@type Texture
-	local flash ---@type Texture
-	local flashAnim ---@type AnimationGroup
+	local spark ---@type Texture? The edge of the fill, not there without the atlases.
+	local sparkGlow ---@type Texture? The glow behind it.
+	local flash ---@type Texture? The flash as we land, not there without the atlases.
+	local flashAnim ---@type AnimationGroup?
 	local flashToken = 0 -- tells the hiding that waits for the flash if it is still the one that should happen
 	local done ---@type Texture What is flown of the route up to the last taxi node we passed.
 	local cut ---@type Texture What is left of the bar after the taxi node we land at when we ask to stop, it is not flown.
@@ -253,12 +255,47 @@ local Visualization do
 		return node.name or format("#%d", node.nodeID)
 	end
 
+	-- The seconds of the flight flown by the simulation as of now. Where we are is only known every half second, so it runs on from there (the first position takes longer, see `Refresh`).
+	---@return number
+	local function CurrentElapsed()
+		if not flight or not startTime then
+			return elapsed
+		end
+		return min(elapsed + min(GetTime() - elapsedAt, positioned and 0.75 or 1.5), flight.duration)
+	end
+
+	-- How far along the bar the given seconds of the flight are, in pixels.
+	---@param seconds number
+	---@return number
+	local function BarX(seconds)
+		if not flight or not frame then
+			return 0
+		end
+		return min(max(seconds / flight.duration, 0), 1) * frame:GetWidth()
+	end
+
+	-- The time left as the bar and its tooltips show it, rounded up so it does not say 00:00 for the last second of the flight.
+	---@param seconds number
+	---@return string
+	local function TimeLeftText(seconds)
+		return lib.GameAPI.FormatDuration(ceil(seconds), true)
+	end
+
+	-- The seconds the flight has gone on by the clock, for the clock notch and the delta beside the bar, which are only there when debugging once the flight is going (nothing otherwise).
+	---@return number?
+	local function ClockSeconds()
+		if startTime and SV:GetOption("debug") then
+			return GetTime() - startTime
+		end
+	end
+
 	---@param self VisualizationNotch
 	local function NotchOnEnter(self)
 		if not flight or not checkpoints then
 			return
 		end
 		local checkpoint = self.checkpoint
+		local flown = CurrentElapsed()
 		hovered, hoveredAt = self, GetTime()
 		if self.highlight and self.line:IsShown() then
 			self.highlight:Show()
@@ -267,16 +304,14 @@ local Visualization do
 		GameTooltip:AddLine(CheckpointName(checkpoint), 1, 1, 1)
 		if self.number ~= 1 then
 			if stopIndex and self.number > stopIndex then
-				GameTooltip:AddLine("Not flown, we land before it.", 0.6, 0.6, 0.6)
-			elseif elapsed >= checkpoint.time then
-				GameTooltip:AddLine("Reached", DONE_TINT[1], DONE_TINT[2], DONE_TINT[3])
-			else
-				GameTooltip:AddLine(format("%s until it is reached", lib.GameAPI.FormatDuration(ceil(checkpoint.time - elapsed), true)), 0.8, 0.8, 0.8)
+				GameTooltip:AddLine("Landing before reaching this location.", 0.8, 0.8, 0.8)
+			elseif flown < checkpoint.time then
+				GameTooltip:AddLine(format("%s until it is reached", TimeLeftText(checkpoint.time - flown)), 0.8, 0.8, 0.8)
 				if stopIndex then
 					if self.number == stopIndex then
 						GameTooltip:AddLine("Stop requested: landing at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
 					end
-				elseif TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= elapsed) then
+				elseif TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= flown) then
 					GameTooltip:AddLine("Request Stop: land at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
 				end
 			end
@@ -385,6 +420,17 @@ local Visualization do
 		end
 		for i = 1, #notches do
 			ApplyClickable(notches[i])
+		end
+	end
+
+	-- Makes a texture the mark of a taxi node (or the clock, or the stop), the pip of the experience bar or a thin line where the atlases are missing.
+	---@param texture Texture
+	local function SetPip(texture)
+		if useAtlas then
+			texture:SetAtlas(ATLAS.pip, true)
+		else
+			texture:SetTexture(WHITE_TEXTURE)
+			texture:SetSize(2, BAR_HEIGHT)
 		end
 	end
 
@@ -518,12 +564,7 @@ local Visualization do
 		-- where the simulation says we are when the flight is going by the clock alone, to compare with where we are going by our position
 		clockNotch = CreateNotch(f, ClockOnEnter, overlay:GetFrameLevel() + 6)
 		local clockNotchLine = clockNotch:CreateTexture(nil, "OVERLAY")
-		if useAtlas then
-			clockNotchLine:SetAtlas(ATLAS.pip, true)
-		else
-			clockNotchLine:SetTexture(WHITE_TEXTURE)
-			clockNotchLine:SetSize(2, BAR_HEIGHT)
-		end
+		SetPip(clockNotchLine)
 		clockNotchLine:SetPoint("CENTER")
 		clockNotch.line = clockNotchLine
 
@@ -533,12 +574,7 @@ local Visualization do
 		cut:SetVertexColor(0, 0, 0, 0.6)
 		cut:Hide()
 		stopMarker = overlay:CreateTexture(nil, "OVERLAY", nil, 3)
-		if useAtlas then
-			stopMarker:SetAtlas(ATLAS.pip, true)
-		else
-			stopMarker:SetTexture(WHITE_TEXTURE)
-			stopMarker:SetSize(2, BAR_HEIGHT)
-		end
+		SetPip(stopMarker)
 		stopMarker:SetVertexColor(STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3], 1)
 		stopMarker:Hide()
 
@@ -619,6 +655,15 @@ local Visualization do
 		end
 	end
 
+	-- Hides the bar, empty so it is empty again when it is shown for the next flight.
+	local function HideBar()
+		if not frame then
+			return
+		end
+		frame:Hide()
+		ResetFill()
+	end
+
 	local STOP_GRACE = 3 -- seconds past the stop we can be, the simulation being off by a bit, before we know it was missed
 
 	-- Lays out the bar for the flight we have.
@@ -627,7 +672,7 @@ local Visualization do
 
 		if not info or not self:IsBarEnabled() then
 			if frame then
-				frame:Hide()
+				HideBar()
 			end
 			return
 		end
@@ -637,26 +682,22 @@ local Visualization do
 
 		local mode = self:GetMode()
 
-		local width = frame:GetWidth()
 		local numCheckpoints = #checkpoints
 		flashToken = flashToken + 1
-		if flashAnim then
+		if flash and flashAnim then
 			flashAnim:Stop()
 			flash:SetAlpha(0)
 		end
-		if spark then
+		if spark and sparkGlow then
 			spark:Show()
 			sparkGlow:Show()
 		end
 
 		done:Hide()
-		stopAt, stopIndex = nil, nil
-		cut:Hide()
-		stopMarker:Hide()
+		ClearStop()
 
 		for i = 1, #notches do
 			notches[i]:Hide()
-			notches[i].line:SetAlpha(1)
 		end
 
 		if mode == "details" then
@@ -667,8 +708,8 @@ local Visualization do
 					notch = CreateNotch(frame, NotchOnEnter, frame:GetFrameLevel() + 5)
 					local line = notch:CreateTexture(nil, "OVERLAY")
 					notch.line = line
+					SetPip(line)
 					if useAtlas then
-						line:SetAtlas(ATLAS.pip, true)
 						notch.highlight = notch:CreateTexture(nil, "OVERLAY", nil, 1)
 						notch.highlight:SetAtlas(ATLAS.pipHighlight, true)
 						notch.highlight:SetBlendMode("ADD")
@@ -693,9 +734,7 @@ local Visualization do
 						down:SetDuration(0.25)
 						down:SetOrder(2)
 					else
-						line:SetTexture(WHITE_TEXTURE)
 						line:SetVertexColor(1, 1, 1, 0.9)
-						line:SetSize(2, BAR_HEIGHT)
 					end
 					line:SetPoint("CENTER")
 					notches[i] = notch
@@ -706,7 +745,7 @@ local Visualization do
 				notch:EnableMouse(true)
 				ApplyClickable(notch)
 				notch:ClearAllPoints()
-				notch:SetPoint("CENTER", fill, "LEFT", checkpoints[i].time / info.duration * width, 0)
+				notch:SetPoint("CENTER", fill, "LEFT", BarX(checkpoints[i].time), 0)
 				notch:SetFrameLevel(frame:GetFrameLevel() + 5)
 				notch:Show()
 			end
@@ -720,7 +759,8 @@ local Visualization do
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	function Visualization:Start(info)
 		activeMode = GetSanitizedMode()
-		flight, checkpoints, stopAt, stopIndex = info, nil, nil, nil
+		flight, checkpoints = info, nil
+		ClearStop()
 		-- nothing runs until we take off, which is some time after the flight is chosen
 		endTime, startTime, elapsed, elapsedAt, shown, positioned = nil, nil, 0, 0, 0, false
 		if frame then
@@ -760,7 +800,7 @@ local Visualization do
 		flashToken = flashToken + 1
 		if finished and wasFlying and frame:IsShown() then
 			fill:SetValue(landedAt)
-			if spark then
+			if spark and sparkGlow then
 				spark:Hide() -- the casting bar does not show it when the cast is done
 				sparkGlow:Hide()
 			end
@@ -771,13 +811,11 @@ local Visualization do
 			local token = flashToken
 			C_Timer.After(FLASH_SECONDS, function()
 				if token == flashToken and frame then
-					frame:Hide()
-					ResetFill()
+					HideBar()
 				end
 			end)
 		else
-			frame:Hide()
-			ResetFill()
+			HideBar()
 		end
 	end
 
@@ -797,7 +835,7 @@ local Visualization do
 			return -- the next taxi node is where we land anyway
 		end
 		stopAt, stopIndex = checkpoints[at].time, at
-		local x = stopAt / flight.duration * frame:GetWidth()
+		local x = BarX(stopAt)
 		cut:ClearAllPoints()
 		cut:SetPoint("TOPLEFT", fill, "TOPLEFT", x, 0)
 		cut:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT")
@@ -846,7 +884,7 @@ local Visualization do
 		-- where we are is only known every half second, so the bar goes on at the speed of the simulation until then, and never back unless the position says we were well ahead
 		local now = GetTime()
 		-- the first position takes two ticks (the distance is the step from the one before), so until it is known the bar has longer to run on
-		local target = startTime and min(elapsed + min(now - elapsedAt, positioned and 0.75 or 1.5), info.duration) or 0
+		local target = startTime and CurrentElapsed() or 0
 		if stopAt then
 			if positioned and elapsed + (now - elapsedAt) > stopAt + STOP_GRACE then
 				-- we are still flying well past where the stop was, it came too late for that node and the flight goes on as it was
@@ -876,11 +914,11 @@ local Visualization do
 		-- before the first position is known the time left is the one of the simulation, from where the bar has run to
 		local seconds = stopAt and max(stopAt - shown, 0) or endTime and max(endTime - GetTime(), 0) or max(info.duration - shown, 0)
 		-- rounded up so it does not show 00:00 for the last second of the flight
-		local text = seconds and seconds > 0 and lib.GameAPI.FormatDuration(ceil(seconds), true) or ""
-		label:SetText(text)
+		label:SetText(seconds > 0 and TimeLeftText(seconds) or "")
 		-- when debugging, how many seconds the flight is behind (+) or ahead (-) of the simulation, which is how far the red notch is from the end of the fill
-		if startTime and SV:GetOption("debug") then
-			local behind = GetTime() - startTime - elapsed
+		local clock = ClockSeconds()
+		if clock then
+			local behind = clock - elapsed
 			isOff = abs(behind) >= (isOff and 0.5 or 1)
 			delta:SetText(isOff and format("%+d", floor(behind + 0.5)) or "")
 			-- the notch of the clock is only red when the flight is off from the simulation, as the number beside the bar is
@@ -894,11 +932,7 @@ local Visualization do
 			delta:SetText("")
 		end
 		if hovered and GetTime() - hoveredAt > 0.2 then
-			if hovered == clockNotch then
-				ClockOnEnter(clockNotch)
-			else
-				NotchOnEnter(hovered)
-			end
+			hovered:GetScript("OnEnter")(hovered) -- makes its tooltip again
 		end
 		if checkpoints and self:GetMode() == "details" then
 			-- up to the last taxi node we passed
@@ -909,7 +943,7 @@ local Visualization do
 				end
 			end
 			local width = frame:GetWidth()
-			local x = min(passed / info.duration, 1) * width
+			local x = BarX(passed)
 			if x > 0 then
 				done:SetWidth(x)
 				done:SetTexCoord(0, x / width, 0, 1)
@@ -928,9 +962,9 @@ local Visualization do
 				end
 			end
 		end
-		if startTime and SV:GetOption("debug") then
+		if clock then
 			clockNotch:ClearAllPoints()
-			clockNotch:SetPoint("CENTER", fill, "LEFT", min((GetTime() - startTime) / info.duration, 1) * frame:GetWidth(), 0)
+			clockNotch:SetPoint("CENTER", fill, "LEFT", BarX(clock), 0)
 			clockNotch:Show()
 		else
 			clockNotch:Hide()
@@ -1006,6 +1040,7 @@ local Recorder do
 	---@field public time number Server time when the flight was taken.
 	---@field public area? number The taxi map.
 	---@field public route number[] The taxi nodes (`TaxiNodes.ID`) of the route.
+	---@field public trips? table<number, number[]> `trips[i]` is the taxi nodes flown from `route[i]` to `route[i + 1]`, both included, where the game does not show the ones between them.
 	---@field public points number[] The path points (`TaxiPathNode.ID`) the estimate was made from, in the order they are flown.
 	---@field public segments FlightRecordSegment[] How the points were split up and estimated.
 	---@field public estimate number Seconds the flight was estimated to take.
@@ -1120,6 +1155,12 @@ local Recorder do
 		for i = 1, #info.nodes do
 			route[i] = info.nodes[i].nodeID
 		end
+		-- the taxi nodes the game does not show that the route passes (the ones it flew through that are phased out or never shown), so the flight can be worked out again the same way
+		local trips ---@type table<number, number[]>?
+		for index, trip in pairs(info.trips) do
+			trips = trips or {}
+			trips[index] = { unpack(trip) }
+		end
 		local points = {} ---@type number[]
 		for i = 1, #info.points do
 			points[i] = info.points[i].id
@@ -1150,6 +1191,7 @@ local Recorder do
 				time = GetServerTime(),
 				area = state.areaID,
 				route = route,
+				trips = trips,
 				points = points,
 				segments = segments,
 				estimate = Round(info.duration, 1),
@@ -1475,6 +1517,30 @@ local State do
 		end
 	end
 
+	-- Where two taxi nodes of the route have no path between them: the ways there that the data has, and which of the taxi nodes in between the game shows.
+	---@param route TaxiTimerLib-1.0_TaxiRouteNode[]
+	---@param shown table<number, boolean>
+	---@return string[] lines
+	local function GapLines(route, shown)
+		local lines = {} ---@type string[]
+		for i = 2, #route do
+			local from, to = route[i - 1].nodeID, route[i].nodeID
+			local trips = lib.GetBridgeCandidates(from, to)
+			if not trips[1] then
+				lines[#lines + 1] = format("No path %d > %d, and no trip between them", from, to)
+			elseif #trips[1] > 2 then
+				for _, trip in ipairs(trips) do
+					local parts = {}
+					for j = 2, #trip - 1 do
+						parts[#parts + 1] = format("#%d%s", trip[j], shown[trip[j]] and " (shown)" or " (not shown)")
+					end
+					lines[#lines + 1] = format("No path %d > %d, trip via %s", from, to, table.concat(parts, ", "))
+				end
+			end
+		end
+		return lines
+	end
+
 	---@param button TaxiButton
 	function State:ButtonTooltip(button)
 		local info = self:GetFlightInfo()
@@ -1522,10 +1588,62 @@ local State do
 		return lib.GameAPI.GetFlightInfoToNode(self.to)
 	end
 
+	-- Test all destinations if we properly detect a path, if not we'll report it in the chat.
+	function State:TestMap()
+		local from = self.from
+		if not from then
+			return
+		end
+		local total = 0
+		local problems = {} ---@type { name: string, lines: string[] }[]
+		for _, node in pairs(self.nodes) do
+			if node.state == Enum.FlightPathState.Reachable then
+				total = total + 1
+				local route, _, shown = lib.GameAPI.GetRouteNodes(node, from)
+				local info = lib.GameAPI.GetFlightInfoToNode(node, from)
+				local lines ---@type string[]?
+				if route and shown then
+					if not info then
+						lines = GapLines(route, shown)
+						table.insert(lines, 1, "no flight information")
+					else
+						local missing = {} ---@type string[]
+						for i = 1, #info.arrivals do
+							if not info.arrivals[i] then
+								missing[#missing + 1] = format("%s > %s", info.nodes[i].name or format("#%d", info.nodes[i].nodeID), info.nodes[i + 1].name or format("#%d", info.nodes[i + 1].nodeID))
+							end
+						end
+						if #missing > 0 then
+							lines = { format("leg left out of the estimate: %s", table.concat(missing, "; ")) }
+						end
+					end
+				end
+				if lines then
+					problems[#problems + 1] = { name = node.name or format("#%d", node.nodeID), lines = lines }
+				end
+			end
+		end
+		local numProblems = #problems
+		if numProblems == 0 then
+			return
+		end
+		table.sort(problems, function(a, b) return a.name < b.name end)
+		print("%s: tried the %d flights from %s: %d without all of their flight information.", addonName, total, from.name or "here", numProblems)
+		for i = 1, math.min(numProblems, 12) do
+			print("  to %s: %s", problems[i].name, table.concat(problems[i].lines, "; "))
+		end
+		if numProblems > 12 then
+			print("  and %d more.", numProblems - 12)
+		end
+	end
+
 	---@param forceUpdate? boolean
 	function State:Update(forceUpdate)
 		if lib.GameAPI.UpdateTaxiMap(forceUpdate) then
 			self.to = nil
+		end
+		if forceUpdate and SV:GetOption("debug") then
+			self:TestMap()
 		end
 	end
 

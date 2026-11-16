@@ -30,7 +30,7 @@ Options:
 	--speeds        show the speed each path was flown at from each of its points, as lines for the PATH_SPEEDS table of the sim file
 	--sim=FILE      the sim file to suggest changes to (default is the one of this addon for the game the flights were recorded on)
 	--worst=SECONDS the seconds a flight must be off by with the sim file as it is now to be listed with what causes it (default 5)
-	--coverage      show how much of each map has been flown, and the maps without flights, to see where to fly next
+	--coverage      show how much of each map has been flown, the paths that have no flight of their own yet (all on a small map, the shortest on a big one), and the maps without flights, to see where to fly next
 	--joins         list every taxi node that was flown past with the points that were flown there, to see where the simulation flies past a node another way than the game
 	--apply         write the suggested changes to the sim file, and analyze again until there is nothing left to change (the suggestions that need more flights are shown and left out)
 	--archive=FILE  the file every flight is kept in (default is `recordings.lua` next to this script)
@@ -574,6 +574,15 @@ if coverage then
 	---@field started table<number, boolean> The taxi nodes flights started at.
 	---@field passed table<number, boolean> The taxi nodes flights flew past.
 	---@field paths table<number, boolean> The paths that were flown.
+	---@field single table<number, boolean> The paths that were flown on a flight of just two taxi nodes, which tells how long the path takes on its own.
+
+	local MIN_FLIGHT_YARDS = 100 -- paths between taxi nodes closer than this are too short to be worth a flight
+	-- taxi nodes that are not for players: hidden hubs, teleport networks, quest paths and test nodes
+	---@param name string
+	---@return boolean
+	local function isHidden(name)
+		return name:find("^%[?[Hh][Ii][Dd][Dd][Ee][Nn]") ~= nil or name:find("Teleport") ~= nil or name:find("^Quest") ~= nil or name:find("^TEMP") ~= nil or name:find("^[Tt][Ee][Ss][Tt]") ~= nil
+	end
 
 	local clients, clientOrder = {}, {} ---@type table<string, AnalysisCoverage>, string[]
 	for _, a in ipairs(analyses) do
@@ -582,7 +591,7 @@ if coverage then
 			local name = a.data.client
 			local seen = clients[name]
 			if not seen then
-				seen = { data = a.data, flights = {}, started = {}, passed = {}, paths = {} }
+				seen = { data = a.data, flights = {}, started = {}, passed = {}, paths = {}, single = {} }
 				clients[name] = seen
 				clientOrder[#clientOrder + 1] = name
 			end
@@ -595,6 +604,9 @@ if coverage then
 				local path = a.data.paths[route[k - 1]] and a.data.paths[route[k - 1]][route[k]]
 				if path then
 					seen.paths[path] = true
+					if #route == 2 then
+						seen.single[path] = true
+					end
 				end
 				if k < #route then
 					seen.passed[route[k]] = true
@@ -607,18 +619,27 @@ if coverage then
 		local seen = clients[name]
 		local data = seen.data
 		-- the taxi nodes and the paths of each map
-		local maps = {} ---@type table<number, { nodes: number[], paths: number, flown: number }>
+		local maps = {} ---@type table<number, { nodes: number[], paths: number, flown: number, open: { from: number, to: number, never: boolean, yards: number }[] }>
 		for id, node in pairs(data.nodes) do
 			if data.paths[id] and next(data.paths[id]) then -- taxi nodes without paths can not be flown from
 				local map = maps[node.map]
 				if not map then
-					map = { nodes = {}, paths = 0, flown = 0 }
+					map = { nodes = {}, paths = 0, flown = 0, open = {} }
 					maps[node.map] = map
 				end
 				map.nodes[#map.nodes + 1] = id
-				for _, path in pairs(data.paths[id]) do
+				for to, path in pairs(data.paths[id]) do
 					map.paths = map.paths + 1
 					map.flown = map.flown + (seen.paths[path] and 1 or 0)
+					-- what a flight of only that path would tell: a path never flown, or only flown as part of a longer flight
+					local target = data.nodes[to]
+					if not seen.single[path] and target and not isHidden(node.name) and not isHidden(target.name) then
+						local dx, dy, dz = target.x - node.x, target.y - node.y, target.z - node.z
+						local yards = math.sqrt(dx * dx + dy * dy + dz * dz)
+						if yards >= MIN_FLIGHT_YARDS then
+							map.open[#map.open + 1] = { from = id, to = to, never = not seen.paths[path], yards = yards }
+						end
+					end
 				end
 			end
 		end
@@ -660,6 +681,21 @@ if coverage then
 			printf("  map %d: %d flights, %d of %d paths flown, started at %d of %d taxi nodes, flew past %d\n", id, seen.flights[id], map.flown, map.paths, started, #map.nodes, passed)
 			if #notStarted > 0 then
 				printf("    no flight starts at: %s\n", names(notStarted, 6))
+			end
+			-- the paths to fly next, a small map shows all of them and a big one the shortest
+			table.sort(map.open, function(a, b)
+				if a.never ~= b.never then
+					return a.never
+				end
+				return a.yards < b.yards
+			end)
+			local limit = map.paths <= 30 and #map.open or 5
+			for i = 1, math.min(limit, #map.open) do
+				local open = map.open[i]
+				printf("    %s: %s > %s (%.0f yd)\n", open.never and "not flown" or "only flown as part of longer flights", data.nodeName(open.from), data.nodeName(open.to), open.yards)
+			end
+			if #map.open > limit then
+				printf("    and %d more paths without a flight of their own\n", #map.open - limit)
 			end
 		end
 		table.sort(without, function(a, b)
