@@ -58,6 +58,15 @@ sim.NODE_JOINS = {
 	[1506] = { -- Telaari Station, Nagrand
 		[1503] = { [1573] = { 7, 7 } }, -- Throne of the Elements, Nagrand > Nivek's Overlook, Nagrand
 	},
+	[2076] = { -- Atal'Gral, Zuldazar
+		[2147] = { [2126] = { 4, 4 } }, -- Castaway Encampment, Zuldazar > Scaletrader Post, Zuldazar
+	},
+	[2080] = { -- Grimwatt's Crash, Nazmir
+		[2145] = { [2112] = { 9, 6 } }, -- Verdant Hollow, Zuldazar > Vulture's Nest, Vol'dun
+	},
+	[2137] = { -- Millstone Hamlet, Stormsong Valley
+		[2102] = { [2138] = { 2, 6 } }, -- Roughneck Camp, Tiragarde Sound > Fort Daelin, Stormsong Valley
+	},
 	[2792] = { -- Maruukai, Ohn'ahran Plains
 		[2795] = { [2799] = { 10, 3 } }, -- Broadhoof Outpost, Ohn'ahran Plains > Rusza'thar Reach, Ohn'ahran Plains
 	},
@@ -89,6 +98,8 @@ sim.SPEED_MODIFIERS = {
 sim.NODE_SPEEDS = {
 	[252] = 45, -- Wyrmrest Temple, Dragonblight
 	[653] = 20, -- Oasis of Vir'sar, Uldum
+	[2137] = 50, -- Millstone Hamlet, Stormsong Valley
+	[2442] = 50, -- Overspark Expedition Camp, Mechagon
 }
 
 -- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
@@ -128,6 +139,18 @@ sim.AREA_SPACING = {
 -- Paths that change the flight speed as they pass their points, as `[pathId] = { [point index] = speed }`. The speed is flown from that point until a later point of the path changes it.
 -- These speeds are not part of the client data, so they come from recorded flights. The first point of a path must have a speed.
 sim.PATH_SPEEDS = {
+	[6466] = { [1] = 25, [3] = 40, [6] = 30, [8] = 15, [9] = 10 }, -- Barbthorn Ridge, Drustvar > Fallhaven, Drustvar
+	[6683] = { [1] = 15, [2] = 25, [3] = 40, [6] = 25 }, -- Watchman's Rise, Drustvar > Whitegrove Chapel, Drustvar
+	[6688] = { [1] = 15, [2] = 25, [3] = 40, [12] = 25 }, -- Arom's Stand, Drustvar > Fletcher's Hollow, Drustvar
+	[6842] = { [1] = 15, [3] = 20, [4] = 30, [5] = 40, [12] = 25, [13] = 15 }, -- Tidecross, Stormsong Valley > Brennadam, Stormsong Valley
+	[6876] = { [1] = 10, [2] = 15, [3] = 25, [4] = 35, [5] = 40, [10] = 35, [11] = 25, [12] = 15 }, -- Tortaka Refuge, Vol'dun > Vulture's Nest, Vol'dun
+	[6932] = { [1] = 20, [3] = 30, [4] = 40, [19] = 25, [20] = 15 }, -- Millstone Hamlet, Stormsong Valley > Roughneck Camp, Tiragarde Sound
+	[6943] = { [1] = 40, [6] = 25 }, -- Atal'Gral, Zuldazar > Castaway Encampment, Zuldazar
+	[7290] = { [1] = 10, [2] = 15, [3] = 25, [4] = 35, [5] = 40, [9] = 50, [11] = 25 }, -- Tortaka Refuge, Vol'dun > Redfield's Watch, Nazmir
+	[7646] = { [1] = 50 }, -- Overspark Expedition Camp, Mechagon > Millstone Hamlet, Stormsong Valley
+	[7744] = { [1] = 25, [2] = 35, [3] = 50, [8] = 35 }, -- Overspark Expedition Camp, Mechagon > Whitegrove Chapel, Drustvar
+	[7745] = { [1] = 15, [2] = 25, [3] = 40, [7] = 25, [8] = 15 }, -- Whitegrove Chapel, Drustvar > Overspark Expedition Camp, Mechagon
+	[7746] = { [1] = 50 }, -- Seekers Vista, Stormsong Valley > Overspark Expedition Camp, Mechagon
 	[7916] = { [1] = 15, [2] = 25, [4] = 40, [5] = 65, [6] = 100, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 30 }, -- Oribos > Pridefall Hamlet, Revendreth
 	[7917] = { [1] = 15, [2] = 25, [3] = 40, [4] = 65, [5] = 100, [6] = 300, [11] = 100, [12] = 65, [13] = 40, [14] = 25 }, -- Pridefall Hamlet, Revendreth > Oribos
 	[8012] = { [1] = 15, [2] = 30, [3] = 50, [7] = 300, [13] = 100, [16] = 65, [17] = 40, [18] = 25 }, -- Aspirant's Rest, Bastion > Oribos

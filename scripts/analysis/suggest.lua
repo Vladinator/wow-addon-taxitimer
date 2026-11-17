@@ -215,10 +215,11 @@ return function(ctx)
 	---@param a table<number, number>
 	---@param b table<number, number>
 	---@return boolean
-	local function agreeSpread(a, b)
+	local function agreeSpread(a, b, skipA, skipB)
 		local points = {}
 		for point in pairs(a) do
-			if b[point] ~= nil then
+			-- the last point of a flight that ended before the path did only has the speed it was going at, not one the path sets
+			if b[point] ~= nil and point ~= skipA and point ~= skipB then
 				points[#points + 1] = point
 			end
 		end
@@ -820,7 +821,7 @@ return function(ctx)
 			local confirmed = {} ---@type table<number, boolean>
 			local onMap = {} ---@type table<number, boolean> The paths the flights of this taxi map flew.
 			do
-				local seenOn = {} ---@type table<number, { gain: number, spread: table<number, number> }[]>
+				local seenOn = {} ---@type table<number, { gain: number, spread: table<number, number>, skip: number? }[]>
 				for _, flight in ipairs(flights) do
 					local without = lib.GetFlightInfoFromGeometry(flight.geometry, map, flight.analysis.record.speedModifier)
 					if without then
@@ -847,6 +848,7 @@ return function(ctx)
 									table.insert(seenOn[path], {
 										gain = (predicted - observed) * (seenYards > 0 and totalYards / seenYards or 1),
 										spread = spreadSpeeds(flown.speeds, flown.first, flown.last),
+										skip = flown.last < #flight.analysis.data.pathPoints[path] - 1 and flown.last or nil,
 									})
 								end
 							end
@@ -856,7 +858,7 @@ return function(ctx)
 				for path, list in pairs(seenOn) do
 					local agree = #list >= 2
 					for i = 1, #list do
-						if abs(list[i].gain) < PATH_CONFIRMED_SECONDS or (list[i].gain > 0) ~= (list[1].gain > 0) or not agreeSpread(list[1].spread, list[i].spread) then
+						if abs(list[i].gain) < PATH_CONFIRMED_SECONDS or (list[i].gain > 0) ~= (list[1].gain > 0) or not agreeSpread(list[1].spread, list[i].spread, list[1].skip, list[i].skip) then
 							agree = false
 						end
 					end
@@ -983,8 +985,11 @@ return function(ctx)
 											end
 										else
 										local unsure = {}
-										for i, point in ipairs(flown.unsure) do
-											unsure[i] = tostring(point)
+										-- the point a speed changed at is not sure on one flight, but when two or more flights agree on the speeds of the path it is the one they show
+										if not confirmed[path] then
+											for i, point in ipairs(flown.unsure) do
+												unsure[i] = tostring(point)
+											end
 										end
 										if not pathLines[path] then
 											pathOrder[#pathOrder + 1] = path
