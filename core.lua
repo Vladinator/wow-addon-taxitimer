@@ -37,7 +37,7 @@ local SV do
 			debug = false,
 			record = false,
 			mode = "bar",
-			bar = { "TOP", "TOP", 0, -140 },
+			bar = { "TOP", "TOP", 0, -110 },
 		},
 		flights = {},
 	}
