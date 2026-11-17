@@ -1298,7 +1298,7 @@ local Recorder do
 	---@field public distance number Yards the segment was estimated to be.
 	---@field public distance2D number Yards the segment was estimated to be as seen from above.
 	---@field public speed number Average speed the segment was estimated to be flown at.
-	---@field public override boolean Always `false`, older versions set it for paths with a made up distance and speed.
+	---@field public override? boolean Only on old recordings, which set it for paths with a made up distance and speed. The analyzer leaves such flights out of its distance and speed checks.
 
 	---@class FlightRecord
 	---@field public version number Format of the record.
@@ -1444,7 +1444,6 @@ local Recorder do
 				distance = Round(segment.distance, 1),
 				distance2D = Round(segment.distance2D, 1),
 				speed = Round(segment.speed, 2),
-				override = false,
 			}
 			numPoints = numPoints + #segment.points
 		end
@@ -1517,9 +1516,15 @@ local Recorder do
 	end
 
 	-- we asked to land early, which ends the flight at the next taxi node
+	-- on the last leg that is the destination, so the flight is no different and it is not marked
 	function Recorder:RequestStop()
 		local flight = current
-		if flight and flight.record.firstTaxi and not flight.record.early then
+		if not flight or not flight.record.firstTaxi or flight.record.early then
+			return
+		end
+		local checkpoints = lib.GetFlightCheckpoints(flight.info)
+		local flown = GetTime() - flight.record.clicked - flight.record.firstTaxi
+		if flown < checkpoints[#checkpoints - 1].time then
 			flight.record.early = Round(GetTime() - flight.record.clicked, 2)
 		end
 	end
