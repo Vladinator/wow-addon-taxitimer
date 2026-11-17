@@ -7,6 +7,13 @@ local function print(text, ...)
 	DEFAULT_CHAT_FRAME:AddMessage(format(text, ...), 1, 1, 0)
 end
 
+-- Get the name of a taxi node.
+---@param node TaxiTimerLib-1.0_FlightCheckpoint|TaxiTimerLib-1.0_TaxiRouteNode|TaxiNodeInfo
+---@return string
+local function NodeName(node)
+	return node.name or format("#%d", node.nodeID)
+end
+
 ---@class SV
 local SV do
 
@@ -551,11 +558,6 @@ local Visualization do
 	---@field public hoveredAt number `GetTime()` when the tooltip was made.
 	local bar = { isOff = false, flashToken = 0, notches = {}, hoveredAt = 0 }
 
-	---@param node TaxiTimerLib-1.0_FlightCheckpoint
-	local function CheckpointName(node)
-		return node.name or format("#%d", node.nodeID)
-	end
-
 	-- The time left as the bar and its tooltips show it, rounded up so it does not say 00:00 for the last second of the flight.
 	---@param seconds number
 	---@return string
@@ -758,7 +760,7 @@ local Visualization do
 		local flown = progress:Elapsed(GetTime())
 		local stopIndex = progress.stopIndex
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
-		GameTooltip:AddLine(CheckpointName(checkpoint), 1, 1, 1)
+		GameTooltip:AddLine(NodeName(checkpoint), 1, 1, 1)
 		if self.number ~= 1 then
 			if stopIndex and self.number > stopIndex then
 				GameTooltip:AddLine("Landing before reaching this location.", 0.8, 0.8, 0.8)
@@ -1514,17 +1516,12 @@ local Recorder do
 		}
 	end
 
-	-- asking to land early ends the flight at the next taxi node
-	if TaxiRequestEarlyLanding then
-		hooksecurefunc("TaxiRequestEarlyLanding", function()
-			if not SV:GetOption("record") then
-				return
-			end
-			local flight = current
-			if flight and flight.record.firstTaxi and not flight.record.early then
-				flight.record.early = Round(GetTime() - flight.record.clicked, 2)
-			end
-		end)
+	-- we asked to land early, which ends the flight at the next taxi node
+	function Recorder:RequestStop()
+		local flight = current
+		if flight and flight.record.firstTaxi and not flight.record.early then
+			flight.record.early = Round(GetTime() - flight.record.clicked, 2)
+		end
 	end
 
 	-- called once the flight has ended, or if we gave up waiting for it to start
@@ -1772,6 +1769,7 @@ local GPS do
 		hooksecurefunc("TaxiRequestEarlyLanding", function()
 			if flight then
 				flight.earlyLanding = true
+				Recorder:RequestStop()
 				Visualization:RequestStop()
 			end
 		end)
@@ -1844,8 +1842,7 @@ local State do
 		return lines
 	end
 
-	---@param button TaxiButton
-	function State:ButtonTooltip(button)
+	function State:ButtonTooltip()
 		local info = self:GetFlightInfo()
 		if not info then
 			if self.from ~= self.to and SV:GetOption("debug") then
@@ -1913,7 +1910,7 @@ local State do
 						local missing = {} ---@type string[]
 						for i = 1, #info.arrivals do
 							if not info.arrivals[i] then
-								missing[#missing + 1] = format("%s > %s", info.nodes[i].name or format("#%d", info.nodes[i].nodeID), info.nodes[i + 1].name or format("#%d", info.nodes[i + 1].nodeID))
+								missing[#missing + 1] = format("%s > %s", NodeName(info.nodes[i]), NodeName(info.nodes[i + 1]))
 							end
 						end
 						if #missing > 0 then
@@ -1922,7 +1919,7 @@ local State do
 					end
 				end
 				if lines then
-					problems[#problems + 1] = { name = node.name or format("#%d", node.nodeID), lines = lines }
+					problems[#problems + 1] = { name = NodeName(node), lines = lines }
 				end
 			end
 		end
@@ -1953,7 +1950,7 @@ local State do
 	---@param button TaxiButton
 	function State:OnEnter(button)
 		self:UpdateButton(button)
-		self:ButtonTooltip(button)
+		self:ButtonTooltip()
 	end
 
 	---@param button TaxiButton
@@ -1975,7 +1972,7 @@ local Frames do
 	Frames = {}
 
 	Frames.FlightMapFrame = {
-		OnLoad = function(manifest, frame)
+		OnLoad = function(_, frame)
 			frame:HookScript("OnShow", function() State:Update(true) end)
 			hooksecurefunc(FlightMap_FlightPointPinMixin, "OnMouseEnter", function(...) State:OnEnter(...) end)
 			hooksecurefunc(FlightMap_FlightPointPinMixin, "OnClick", function(...) State:OnClick(...) end)
