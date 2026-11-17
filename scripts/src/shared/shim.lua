@@ -8,7 +8,7 @@ Each time the library is loaded it gets a `LibStub` of its own, so loading a gam
 
 Usage:
 
-	local shim = dofile("scripts/shim.lua")
+	local shim = dofile("scripts/src/shared/shim.lua")
 	local lib = shim.library("path/to/the/addon", "mainline") -- the TaxiTimerLib-1.0 with the db and sim of the game
 
 --]]

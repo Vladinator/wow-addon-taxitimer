@@ -1,11 +1,11 @@
--- Small helpers for the analysis. They only use what every version of Lua from 5.1 and up has.
+-- Small helpers the scripts share. They only use what every version of Lua from 5.1 and up has.
 
 ---A list of values by a key that remembers the order the keys were added in.
 ---@class AnalysisGroups
 ---@field order string[] The keys in the order they were added.
 ---@field byKey table<string, any[]> The values of each key.
 
----@class AnalysisUtil
+---@class ScriptsUtil
 local util = {}
 
 ---@type number
@@ -81,6 +81,14 @@ end
 ---@return string
 function util.signed(seconds)
 	return string.format("%+.1f", seconds)
+end
+
+---The middle of the values (the lower one of the two in the middle if there is an even number of them), sorting them.
+---@param values number[]
+---@return number
+function util.median(values)
+	table.sort(values)
+	return values[floor((#values + 1) / 2)]
 end
 
 ---Checks if the single bit `flag` is set in `flags`.

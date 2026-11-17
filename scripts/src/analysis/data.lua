@@ -3,8 +3,10 @@
 ---What the analysis modules share.
 ---@class AnalysisContext
 ---@field shim Shim
----@field util AnalysisUtil
+---@field util ScriptsUtil
+---@field csv Csv
 ---@field dir string The folder of the scripts.
+---@field dataDir string The folder with the csv files and the recorded flights.
 ---@field root string The folder of the addon.
 ---@field reload? fun() Forgets the taxi data that was loaded, so the files of the addon are read again (after the sim file was changed).
 
@@ -50,72 +52,19 @@ return function(ctx)
 
 	local cache = {} ---@type table<string, TaxiData>
 
-	---Reads a csv file into a list of rows that are lists of fields. Fields can be in quotes, with quotes in them doubled.
-	---@param text string
-	---@return string[][]
-	local function readCsv(text)
-		local rows, row, field = {}, {}, {}
-		local inQuotes = false
-		local i, length = 1, #text
-		while i <= length do
-			local c = text:sub(i, i)
-			if inQuotes then
-				if c == '"' then
-					if text:sub(i + 1, i + 1) == '"' then
-						field[#field + 1] = '"'
-						i = i + 1
-					else
-						inQuotes = false
-					end
-				else
-					field[#field + 1] = c
-				end
-			elseif c == '"' then
-				inQuotes = true
-			elseif c == "," then
-				row[#row + 1] = table.concat(field)
-				field = {}
-			elseif c == "\n" then
-				row[#row + 1] = table.concat(field)
-				field = {}
-				rows[#rows + 1] = row
-				row = {}
-			elseif c ~= "\r" then
-				field[#field + 1] = c
-			end
-			i = i + 1
-		end
-		if #field > 0 or #row > 0 then
-			row[#row + 1] = table.concat(field)
-			rows[#rows + 1] = row
-		end
-		return rows
-	end
-
 	---The names and positions of the taxi nodes, the db the addon has does not have them.
 	---@param client TaxiTimerLib-1.0_GameFlavor
 	---@return table<number, TaxiDataNode>
 	local function readNodes(client)
 		local nodes = {} ---@type table<number, TaxiDataNode>
-		local dir = ctx.dir .. "/csv_" .. client .. "/"
-		local text
-		for _, name in ipairs({ "taxinodes.csv", "TaxiNodes.csv" }) do
-			text = shim.readfile(dir .. name)
-			if text then
-				break
-			end
-		end
-		if not text then
-			util.warn("no taxinodes.csv in %s so the taxi nodes have no names or positions", dir)
+		local dir = ctx.dataDir .. "/csv_" .. client
+		local file = ctx.csv.read(dir, "taxinodes")
+		if not file then
+			util.warn("no taxinodes.csv in %s/ so the taxi nodes have no names or positions", dir)
 			return nodes
 		end
-		local rows = readCsv(text)
-		local columns = {} ---@type table<string, number>
-		for i, name in ipairs(rows[1] or {}) do
-			columns[name] = i
-		end
-		for r = 2, #rows do
-			local row = rows[r]
+		local columns, rows = file.columns, file.rows
+		for _, row in ipairs(rows) do
 			local id = tonumber(row[columns.ID or 0])
 			if id then
 				nodes[id] = {

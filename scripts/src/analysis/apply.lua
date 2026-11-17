@@ -16,11 +16,26 @@
 ---@param ctx AnalysisContext
 ---@return ApplyChanges
 return function(ctx)
-	local shim = ctx.shim
+	local shim, util = ctx.shim, ctx.util
 	local format = string.format
 
 	-- the suggestions that need more flights before they are written, by what the line after them or their comment says
 	local UNSURE = { "not sure about point", "only one flight starts at this taxi node" }
+
+	-- how a suggestion begins: the action and the word that comes after it
+	local ACTIONS = { { "add", "to" }, { "change", "in" }, { "remove", "from" } }
+
+	-- if a line is the beginning of a suggestion
+	---@param line string
+	---@return boolean
+	local function startsSuggestion(line)
+		for _, words in ipairs(ACTIONS) do
+			if line:match("^%s*" .. words[1] .. " " .. words[2] .. " ") then
+				return true
+			end
+		end
+		return false
+	end
 
 	---@param text string
 	---@return string
@@ -48,18 +63,18 @@ return function(ctx)
 		local changes, held = {}, {} ---@type AppliedChange[], string[]
 		for i, line in ipairs(suggestions) do
 			local text = trim(line)
-			local action, name, rest = text:match("^(add) to ([A-Z_]+):%s+(%[.+)$")
-			if not action then
-				action, name, rest = text:match("^(change) in ([A-Z_]+):%s+(%[.+)$")
-			end
-			if not action then
-				action, name, rest = text:match("^(remove) from ([A-Z_]+):%s+(%[.+)$")
+			local action, name, rest
+			for _, words in ipairs(ACTIONS) do
+				action, name, rest = text:match("^(" .. words[1] .. ") " .. words[2] .. " ([A-Z_]+):%s+(%[.+)$")
+				if action then
+					break
+				end
 			end
 			if action then
 				local unsure = false
 				-- the line after it can say it is not sure, unless it is the next suggestion (what that one says is about that one)
 				local after = suggestions[i + 1] or ""
-				if after:match("^%s*add to ") or after:match("^%s*change in ") or after:match("^%s*remove from ") then
+				if startsSuggestion(after) then
 					after = ""
 				end
 				for _, words in ipairs(UNSURE) do
@@ -175,10 +190,10 @@ return function(ctx)
 			end
 		end
 		local block = {} ---@type string[]
-		for _, node in ipairs(ctx.util.keys(joins)) do
+		for _, node in ipairs(util.keys(joins)) do
 			local entries = {} ---@type string[]
-			for _, from in ipairs(ctx.util.keys(joins[node])) do
-				for _, to in ipairs(ctx.util.keys(joins[node][from])) do
+			for _, from in ipairs(util.keys(joins[node])) do
+				for _, to in ipairs(util.keys(joins[node][from])) do
 					local join = joins[node][from][to]
 					entries[#entries + 1] = format("\t\t[%d] = { [%d] = { %d, %d } }, -- %s > %s", from, to, join[1], join[2], data.nodeName(from), data.nodeName(to))
 				end
@@ -213,7 +228,7 @@ return function(ctx)
 		end
 		local text = shim.readfile(simFile)
 		if not text then
-			ctx.util.warn("unable to read %s", simFile)
+			util.warn("unable to read %s", simFile)
 			return 0, held
 		end
 		local newline = text:find("\r\n", 1, true) and "\r\n" or "\n"
@@ -246,7 +261,7 @@ return function(ctx)
 		if applied > 0 then
 			local file = io.open(simFile, "wb")
 			if not file then
-				ctx.util.warn("unable to write %s", simFile)
+				util.warn("unable to write %s", simFile)
 				return 0, held
 			end
 			file:write(table.concat(lines, newline), newline)

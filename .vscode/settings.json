@@ -18,7 +18,7 @@
         ".vscode",
         "libs/LibStub",
         "libs/TaxiTimerLib/db_*.lua",
-        "scripts/recordings.lua"
+        "scripts/data/*"
     ],
     "Lua.diagnostics.disable": [
         "toc-file-name"

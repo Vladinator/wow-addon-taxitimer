@@ -7,12 +7,28 @@ They need Lua 5.1 or later.
 | File | Purpose |
 | --- | --- |
 | `analyze.lua` | Compares recorded flights to the simulation and says what to change in the `libs/TaxiTimerLib/sim_<game>.lua` files, or writes the changes itself. |
-| `launcher.lua` | Generates the `libs/TaxiTimerLib/db_<game>.lua` files (and svg maps) from the csv files in the `csv_<game>` folders. |
+| `launcher.lua` | Generates the `libs/TaxiTimerLib/db_<game>.lua` files (and svg maps) from the csv files in the `data/csv_<game>` folders. |
+| `src/` | What the two scripts above are made of, nothing in it is run directly. |
+| `data/` | What they read and write, see below. |
+
+The `data` folder:
+
+| File | Purpose |
+| --- | --- |
+| `csv_<game>/` | The taxi data of each game, as the game dumps it. Read by `launcher.lua` and `analyze.lua`. |
+| `svg_<game>/` | The svg maps `launcher.lua` makes of them, not kept in git. |
 | `recordings.lua` | Every flight that was ever recorded. Written by `analyze.lua`, not by hand. |
-| `taxiparser.lua` | The csv reader and db/svg writer that `launcher.lua` uses. |
-| `shim.lua` | Loads `libs/TaxiTimerLib` (with its LibStub and the db and sim of a game) and the saved variables in plain Lua, in any version from 5.1. Used by the other scripts. |
-| `meta.lua` | Type declarations for the language server. Nothing runs it. |
-| `analysis/` | The parts of `analyze.lua`. |
+
+The `src` folder:
+
+| File | Purpose |
+| --- | --- |
+| `analysis/` | The parts of `analyze.lua`: reading the options and the flights, the summary, the suggestions to the sim file (with their parts in `analysis/suggest/`) and writing them, and the analysis of a single flight (with its parts in `analysis/flight/`). |
+| `taxiparser.lua` | Reads the csv files and writes the db files for `launcher.lua`. The svg maps are drawn by `taxiparser/svg.lua`. |
+| `shared/csv.lua` | Reads the csv files of the taxi data, for `taxiparser.lua` and `analyze.lua`. |
+| `shared/util.lua` | Small helpers the scripts share. |
+| `shared/shim.lua` | Loads `libs/TaxiTimerLib` (with its LibStub and the db and sim of a game) and the saved variables in plain Lua, in any version from 5.1. |
+| `shared/meta.lua` | Type declarations for the language server. Nothing runs it. |
 
 ## analyze.lua
 
@@ -20,7 +36,7 @@ They need Lua 5.1 or later.
 lua scripts/analyze.lua [SavedVariables/TaxiTimer.lua] [options]
 ```
 
-Record flights by setting `RECORD_FLIGHTS = true` at the top of `core.lua`, fly, then log out or reload.
+Record flights with `/taxitimer record` in the game, fly, then log out or reload.
 
 With the SavedVariables file, the flights that are not in `recordings.lua` yet are added to it. All the flights in `recordings.lua` are then analyzed. Without the file, `recordings.lua` is analyzed as it is. A flight is never added twice.
 
@@ -37,7 +53,7 @@ The output lists each flight with how far off the simulation is now, the flights
 | `--worst=SECONDS` | How far off a flight must be to be listed with its cause (default 5). |
 | `--sim=FILE` | Use this sim file instead of the one of the addon, to try things on a copy. |
 | `--client=NAME` | Use the data of this game (`mainline`, `forever`, `classic`, `vanilla`) instead of the one the flight was recorded on. |
-| `--archive=FILE` | Keep the flights in this file instead of `recordings.lua`. |
+| `--archive=FILE` | Keep the flights in this file instead of `data/recordings.lua`. |
 | `--no-archive` | Only look at the SavedVariables file, and keep nothing. |
 | `--keep-old` | Also use the flights from before a game build changed how their route or map is flown. |
 | `--no-suggest` | Do not show the suggested changes. |
@@ -64,7 +80,7 @@ The games are `mainline`, `forever`, `classic` and `vanilla`. Without any, all f
 | Option | What it does |
 | --- | --- |
 | `--no-svg` | Only generate the db files. |
-| `--out=FOLDER` | Write the files to this folder instead of `libs/TaxiTimerLib` (db files) and the scripts folder (svg maps). |
+| `--out=FOLDER` | Write the files to this folder instead of `libs/TaxiTimerLib` (db files) and `data` (svg maps). |
 
 Commonly used:
 

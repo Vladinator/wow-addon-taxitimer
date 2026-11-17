@@ -71,9 +71,8 @@ return function(ctx)
 	local format, concat = string.format, table.concat
 	local abs, floor, max, min = math.abs, math.floor, math.max, math.min
 	local INF = util.INF
-	local hypot, hasFlag, clock = util.hypot, util.hasFlag, util.clock
+	local hypot = util.hypot
 
-	local STOP = 0x2
 	local STALL_SECONDS = 3 -- seconds a flight can stand still at the end before it is a wait for the server and not the landing
 	local MAX_STILL_SECONDS = 20 -- seconds a flight can stand still in one go before the game is seen as having lost it (stops along the way are a few seconds)
 
@@ -438,39 +437,43 @@ return function(ctx)
 		end
 	end
 
-	-- What makes the flight differ from what the simulation gives now, as lines to show: the distance, how the taxi nodes were flown past, the speed of the paths and the time spent loading.
-	---@param seconds number The seconds a cause must add or take away to be shown.
-	---@return string[]
-	function Flight:whyOff(seconds)
-		local lines = {} ---@type string[]
-		local info, geometry = self:replay(), self:geometry()
-		if not info or not geometry then
-			return lines
-		end
+	-- flying further or shorter than the simulation is about how the taxi nodes are flown past
+	---@param self FlightAnalysis
+	---@param lines string[]
+	---@param info TaxiTimerLib-1.0_FlightInfo
+	---@param geometry TaxiTimerLib-1.0_FlightGeometry
+	---@param seconds number
+	local function distanceCause(self, lines, info, geometry, seconds)
 		local data = self.data
-		local scale = self.lib.TAXI_SPEED_SCALE
-
-		-- flying further or shorter than the simulation is about how the taxi nodes are flown past
 		local yards = self.travelled - geometry.distance
-		if not self.hasOverride and info.areaSpeed > 0 and abs(yards) / info.areaSpeed >= seconds then
-			lines[#lines + 1] = format("distance: flew %.0f yd %s than the simulation flies (%.0f against %.0f), %.1f sec at %.0f yd/sec", abs(yards), yards < 0 and "less" or "more", self.travelled, geometry.distance, abs(yards) / info.areaSpeed, info.areaSpeed)
-			local route = self.record.route or {}
-			for k = 2, #route - 1 do
-				local from, node, to = route[k - 1], route[k], route[k + 1]
-				local arriving = data.paths[from] and data.paths[from][node]
-				local leaving = data.paths[node] and data.paths[node][to]
-				if arriving and leaving then
-					local last, first, whole = self:flownJoin(arriving, leaving)
-					if last then
-						lines[#lines + 1] = format("  past %s: flew the path in up to point %d of %d and the path out from point %d%s", data.nodeName(node), last, #data.pathPoints[arriving], first, whole and " (all of both)" or "")
-					else
-						lines[#lines + 1] = format("  past %s: the samples do not show how it was flown", data.nodeName(node))
-					end
+		if self.hasOverride or info.areaSpeed <= 0 or abs(yards) / info.areaSpeed < seconds then
+			return
+		end
+		lines[#lines + 1] = format("distance: flew %.0f yd %s than the simulation flies (%.0f against %.0f), %.1f sec at %.0f yd/sec", abs(yards), yards < 0 and "less" or "more", self.travelled, geometry.distance, abs(yards) / info.areaSpeed, info.areaSpeed)
+		local route = self.record.route or {}
+		for k = 2, #route - 1 do
+			local from, node, to = route[k - 1], route[k], route[k + 1]
+			local arriving = data.paths[from] and data.paths[from][node]
+			local leaving = data.paths[node] and data.paths[node][to]
+			if arriving and leaving then
+				local last, first, whole = self:flownJoin(arriving, leaving)
+				if last then
+					lines[#lines + 1] = format("  past %s: flew the path in up to point %d of %d and the path out from point %d%s", data.nodeName(node), last, #data.pathPoints[arriving], first, whole and " (all of both)" or "")
+				else
+					lines[#lines + 1] = format("  past %s: the samples do not show how it was flown", data.nodeName(node))
 				end
 			end
 		end
+	end
 
-		-- the paths that were flown faster or slower than the simulation flies them
+	-- the paths that were flown faster or slower than the simulation flies them
+	---@param self FlightAnalysis
+	---@param lines string[]
+	---@param info TaxiTimerLib-1.0_FlightInfo
+	---@param seconds number
+	local function speedCause(self, lines, info, seconds)
+		local data = self.data
+		local scale = self.lib.TAXI_SPEED_SCALE
 		local _, intervals = self:observe()
 		local byPath, order = {}, {} ---@type table<number, { observed: number, predicted: number, flown: table<number, boolean>, used: table<number, boolean> }>, number[]
 		for i, interval in ipairs(intervals) do
@@ -502,7 +505,19 @@ return function(ctx)
 				lines[#lines + 1] = format("speed: path %d (%s) was flown at %s where the simulation uses %s, %+.1f sec", id, data.pathName(id) or "?", concat(flown, "/"), concat(used, "/"), diff)
 			end
 		end
+	end
 
+	-- What makes the flight differ from what the simulation gives now, as lines to show: the distance, how the taxi nodes were flown past, the speed of the paths and the time spent loading.
+	---@param seconds number The seconds a cause must add or take away to be shown.
+	---@return string[]
+	function Flight:whyOff(seconds)
+		local lines = {} ---@type string[]
+		local info, geometry = self:replay(), self:geometry()
+		if not info or not geometry then
+			return lines
+		end
+		distanceCause(self, lines, info, geometry, seconds)
+		speedCause(self, lines, info, seconds)
 		if self.stillTime >= seconds then
 			lines[#lines + 1] = format("standing still: %.1f sec", self.stillTime)
 		end
@@ -603,436 +618,10 @@ return function(ctx)
 		return text
 	end
 
-	--
-	-- MARK: What the simulation of the addon says about the flight, going by the points it flies now
-	--
-
-	-- The points the flight goes through and how far it is between them, from the simulation of the addon.
-	---@return TaxiTimerLib-1.0_FlightGeometry?
-	function Flight:geometry()
-		if self._geometry == nil then
-			local nodes = {} ---@type TaxiTimerLib-1.0_TaxiRouteNode[]
-			for i, id in ipairs(self.record.route or {}) do
-				nodes[i] = { nodeID = id }
-			end
-			local geometry = self.lib.GetFlightGeometry(nodes, nil, nil, self.record.trips)
-			self._geometry = #geometry.points > 0 and geometry or false
-		end
-		return self._geometry or nil
-	end
-
-	-- the speed flown from each point where the speed changed, as `{ [path id] = { speeds = { [point index] = speed }, first, last, unsure, time, distance } }`, and a list of the stretches between the points of the flight in the order they are flown
-	-- the stretches are `{ path, point, yards, speed }` where the speed is the speed flown for most of it to the nearest 5, or nil if we did not see it
-	-- the game changes the speed as it passes a point, so where we were when the speed changed tells us which point it was
-	---@return table<number, PathObservation> paths
-	---@return FlownStretch[] intervals
-	function Flight:observe()
-		if self._observed then
-			return self._observed.paths, self._observed.intervals
-		end
-		local lib = self.lib
-		local paths, intervals = {}, {}
-		self._observed = { paths = paths, intervals = intervals }
-		if self.noPosition then
-			return paths, intervals
-		end
-		local geometry = self:geometry()
-		if not geometry then
-			return paths, intervals
-		end
-		local numBefore = 0
-		for _, segment in ipairs(geometry.segments) do
-			local points = segment.points
-			local lengths = segment.intervals or {}
-			for i = 1, #points - 1 do
-				intervals[numBefore + i] = { path = points[i].pathId, point = points[i].index, yards = lengths[i] or 0 }
-			end
-			local curve, starts = lib.CatmullPath(points)
-			if #curve >= 2 and #points >= 2 then
-				self:observeSegment(points, curve, starts, intervals, numBefore, paths)
-			end
-			-- the stretches of the next segment come after the stretches between the points of this one
-			numBefore = numBefore + max(0, #points - 1)
-		end
-		return paths, intervals
-	end
-
-	---@param points TaxiTimerLib-1.0_TaxiPathNode[]
-	---@param curve TaxiTimerLib-1.0_Point[]
-	---@param starts number[]
-	---@param intervals FlownStretch[]
-	---@param numBefore number
-	---@param paths table<number, PathObservation>
-	function Flight:observeSegment(points, curve, starts, intervals, numBefore, paths)
-		local along = { 0 }
-		for k = 2, #curve do
-			local a, b = curve[k - 1], curve[k]
-			along[k] = along[k - 1] + math.sqrt((b.x - a.x) ^ 2 + (b.y - a.y) ^ 2 + (b.z - a.z) ^ 2)
-		end
-		-- the points that are not at the same position as the point before them
-		local kept = {}
-		for i = 1, #points do
-			if i == 1 or starts[i] > starts[i - 1] then
-				kept[#kept + 1] = i
-			end
-		end
-		-- how far along the curve we were each time we looked
-		local seen = {}
-		local at = 1
-		local map = points[1].map
-		for _, s in ipairs(self.track) do
-			if self:sameMap(s.map, map) then
-				local best
-				for k = at, min(#curve - 1, at + 39) do
-					local a, b = curve[k], curve[k + 1]
-					local dx, dy = b.x - a.x, b.y - a.y
-					local len = dx * dx + dy * dy
-					local t = len > 0 and max(0, min(1, ((s.x - a.x) * dx + (s.y - a.y) * dy) / len)) or 0
-					local distance = hypot(a.x + dx * t - s.x, a.y + dy * t - s.y)
-					if not best or distance < best.distance - 0.000001 then
-						best = { distance = distance, k = k, t = t }
-					end
-				end
-				if best and best.distance <= 150 then
-					at = best.k
-					if s.speed >= 1 then
-						seen[#seen + 1] = { t = s.t, along = along[at] + (along[at + 1] - along[at]) * best.t, speed = s.speed }
-					end
-				end
-			end
-		end
-		-- the speed each stretch between two points was flown at for most of it
-		for i = 1, #points - 1 do
-			local from, to = along[starts[i]], along[starts[i + 1]]
-			local flown = {}
-			for _, look in ipairs(seen) do
-				if look.along >= from and look.along < to then
-					flown[#flown + 1] = look.speed
-				end
-			end
-			table.sort(flown)
-			if #flown > 0 then
-				intervals[numBefore + i].speed = self:roundSpeed(flown[floor(#flown / 2) + 1])
-			end
-		end
-		if #seen == 0 then
-			return
-		end
-		-- the speed when first seen is what the first point set, each change after it is what the point we passed between two looks set
-		local changes = { { 1, self:roundSpeed(seen[1].speed), false } } -- { position among the kept points, speed, unsure }
-		local speed = seen[1].speed
-		for i = 2, #seen do
-			local a, b = seen[i - 1], seen[i]
-			if abs(b.speed - speed) > 1.5 then
-				local dt = b.t - a.t
-				local tau = a.speed ~= b.speed and ((b.along - a.along) - b.speed * dt) / (a.speed - b.speed) or dt / 2
-				local where = a.along + a.speed * max(0, min(dt, tau))
-				local between, nearest = {}, nil
-				for position, point in ipairs(kept) do
-					local start = along[starts[point]]
-					if start >= a.along - 12 and start <= b.along + 12 then
-						between[#between + 1] = position
-					end
-					if not nearest or abs(start - where) < abs(along[starts[kept[nearest]]] - where) then
-						nearest = position
-					end
-				end
-				changes[#changes + 1] = { #between == 1 and between[1] or nearest, self:roundSpeed(b.speed), #between ~= 1 }
-				speed = b.speed
-			end
-		end
-		for position, point in ipairs(kept) do
-			local p = points[point]
-			local info = paths[p.pathId]
-			if not info then
-				info = { speeds = {}, first = p.index, last = p.index, unsure = {}, time = 0, distance = 0 }
-				paths[p.pathId] = info
-				-- the first point of a path we fly is flown at the speed set before we got to it
-				for _, change in ipairs(changes) do
-					if change[1] <= position then
-						info.speeds[p.index] = change[2]
-					end
-				end
-			end
-			info.last = p.index
-		end
-		-- the seconds and yards flown on each path
-		for i = 2, #seen do
-			local position = 1
-			for pos, point in ipairs(kept) do
-				if along[starts[point]] <= seen[i - 1].along then
-					position = pos
-				end
-			end
-			local info = paths[points[kept[position]].pathId]
-			info.time = info.time + seen[i].t - seen[i - 1].t
-			info.distance = info.distance + seen[i].along - seen[i - 1].along
-		end
-		for _, change in ipairs(changes) do
-			local p = points[kept[change[1]]]
-			local info = paths[p.pathId]
-			info.speeds[p.index] = change[2]
-			if change[3] then
-				info.unsure[#info.unsure + 1] = p.index
-			end
-		end
-	end
-
-	--
-	-- MARK: The report
-	--
-
-	---@return string
-	function Flight:report()
-		local r, d = self.record, self.data
-		local out = {}
-		local function add(text)
-			out[#out + 1] = text
-		end
-		add(format("Flight %d: %s", self.index, self:routeName()))
-		add(format("  recorded %s on %s build %s with addon %s, taxi map %s, %d samples", r.time and (os.date("!%Y-%m-%d %H:%M", r.time) .. " UTC") or "?", d.client, tostring(r.build or "?"), tostring(r.addon or "?"), tostring(r.area or "?"), #self.track))
-		if self.incomplete then
-			add(format("  INCOMPLETE: %s, so the estimate does not apply and the flight is left out of the summary of its taxi map", self.incomplete))
-		end
-		for _, warning in ipairs(self.warnings) do
-			add("  WARNING: " .. warning)
-		end
-		if #self.track < 2 then
-			add("  not enough samples to analyze")
-			return concat(out, "\n")
-		end
-
-		-- time
-		local err = self:error()
-		add("")
-		add("  Time")
-		add(format("    estimated %s, took %s (give or take %.1f sec), the flight was %.1f sec %s than estimated (%+.1f%%)", clock(self.estimate), clock(self.actual), self.uncertainty, abs(err), err < 0 and "shorter" or "longer", self.estimate > 0 and err / self.estimate * 100 or 0))
-		local split = self:errorSplit()
-		if split then
-			local parts = {}
-			for _, part in ipairs(split) do
-				parts[#parts + 1] = format("%s %s", part[1], util.signed(part[2]))
-			end
-			add("    seconds longer (+) or shorter (-) by cause: " .. concat(parts, ", "))
-			if self.hasOverride then
-				add("    the route has a path with its own made up distance and speed, so distance and speed above can't be told apart for it")
-			end
-		end
-		if r.delay and r.delay ~= 0 then
-			add(format("    the paths have %d sec of stops which were %s the estimate", r.delay, r.delayIncluded and "part of" or "not part of"))
-		end
-
-		-- distance
-		add("")
-		add("  Distance")
-		add(format("    estimated %.0f yd (%.0f yd seen from above), flew %.0f yd going by speed and %.0f yd seen from above going by position", r.distance, r.distance2D, self.travelled, self.travelled2D))
-		for i, segment in ipairs(r.segments or {}) do
-			local flown, time = 0, 0
-			for j = 2, #self.track do
-				local point = self.track[j].point
-				if point >= segment.first and point <= segment.last then
-					flown = flown + self.steps[j].yards
-					time = time + self.steps[j].dt
-				end
-			end
-			local text = format("    segment %d (points %d to %d): estimated %.0f yd seen from above at %.1f yd/sec taking %.1f sec, flew %.0f yd seen from above in %.1f sec", i, segment.first, segment.last, segment.distance2D, segment.speed, segment.speed > 0 and segment.distance / segment.speed or 0, flown, time)
-			if segment.override then
-				text = text .. " (made up distance and speed, only the time compares)"
-			elseif segment.distance2D > 0 then
-				text = text .. format(" (%+.1f%%)", (flown - segment.distance2D) / segment.distance2D * 100)
-			end
-			add(text)
-		end
-		local first = self.track[1]
-		local last = self.track[#self.track]
-		local route = r.route or {}
-		local from = d.nodes[route[1] or 0]
-		local to = d.nodes[route[#route] or 0]
-		local points = r.points or {}
-		local firstPoint = d.points[points[1] or 0]
-		local lastPoint = d.points[points[#points] or 0]
-		local text = {}
-		if firstPoint then text[#text + 1] = format("first seen %.0f yd from the first point", hypot(firstPoint.x - first.x, firstPoint.y - first.y)) end
-		if from then text[#text + 1] = format("%.0f yd from where the first taxi node is", hypot(from.x - first.x, from.y - first.y)) end
-		if lastPoint then text[#text + 1] = format("last seen %.0f yd from the last point", hypot(lastPoint.x - last.x, lastPoint.y - last.y)) end
-		if to then text[#text + 1] = format("%.0f yd from where the last taxi node is", hypot(to.x - last.x, to.y - last.y)) end
-		if self.noPosition then
-			add("    no positions were given (an instance), so the distance flown is the speed times the time")
-		elseif #text > 0 then
-			add("    " .. concat(text, ", "))
-		end
-		if self.jumps > 0 then
-			add(format("    jumped %d times (changed map or moved further than could be flown), taking %.1f sec", self.jumps, self.jumpTime))
-		end
-
-		-- points
-		if not self.noPosition then
-		add("")
-		add("  Points")
-		local used, missed = {}, {}
-		for i, id in ipairs(points) do
-			used[id] = true
-			local p = d.points[id]
-			if not p then
-				missed[#missed + 1] = "      " .. self:describePoint(id)
-			else
-				local distance = self:distanceToTrack(p.x, p.y, p.map)
-				if distance > self.far then
-					missed[#missed + 1] = format("      %d. %s: %s", i, self:describePoint(id), distance == INF and "never on its map" or format("%.0f yd away", distance))
-				end
-			end
-		end
-		add(format("    %d of the %d points the estimate was made from were not flown (further than %d yd away)%s", #missed, #points, self.far, #missed > 0 and ":" or ""))
-		for _, line in ipairs(missed) do
-			add(line)
-		end
-		local flown, skipped = {}, 0
-		for i = 1, #route - 1 do
-			local destinations = d.paths[route[i]]
-			local path = destinations and destinations[route[i + 1]]
-			if not path then
-				add(format("    no path from %s to %s in the taxi data", d.nodeName(route[i]), d.nodeName(route[i + 1])))
-			else
-				for _, id in ipairs(d.pathPoints[path] or {}) do
-					if not used[id] then
-						skipped = skipped + 1
-						local p = d.points[id]
-						local distance = self:distanceToTrack(p.x, p.y, p.map)
-						if distance <= self.near then
-							flown[#flown + 1] = format("      %s: %.0f yd away", self:describePoint(id), distance)
-						end
-					end
-				end
-			end
-		end
-		add(format("    %d of the %d points the estimate skipped were flown (within %d yd)%s", #flown, skipped, self.near, #flown > 0 and ":" or ""))
-		for _, line in ipairs(flown) do
-			add(line)
-		end
-
-		end
-
-		-- speed
-		add("")
-		add("  Speed")
-		local typical = self:typicalSpeed()
-		add(format("    the estimate used %.2f yd/sec for the taxi map, the flight was mostly flown at %s yd/sec", r.areaSpeed or 0, typical == nil and "?" or format("%.2f", typical)))
-		local perPath, pathOrder = {}, {}
-		for j = 2, #self.track do
-			local step = self.steps[j]
-			if step.kind == "move" then
-				local p = d.points[points[self.track[j].point] or 0]
-				local path = p and p.path or 0
-				local info = perPath[path]
-				if not info then
-					info = { time = 0, weighted = 0, min = INF, max = -INF, yards = 0 }
-					perPath[path] = info
-					pathOrder[#pathOrder + 1] = path
-				end
-				info.time = info.time + step.dt
-				info.weighted = info.weighted + step.speed * step.dt
-				info.min = min(info.min, step.speed)
-				info.max = max(info.max, step.speed)
-				info.yards = info.yards + step.yards
-			end
-		end
-		for _, path in ipairs(pathOrder) do
-			local info = perPath[path]
-			add(format("    path %s: %.1f sec, %.0f yd seen from above, %.2f yd/sec on average (%.2f to %.2f)", path ~= 0 and tostring(path) or "?", info.time, info.yards, info.time > 0 and info.weighted / info.time or 0, info.min, info.max))
-		end
-		-- the stretches flown at the same speed
-		local stretches, current = {}, nil
-		for j = 2, #self.track do
-			local step = self.steps[j]
-			local speed = step.kind == "move" and step.speed or (step.kind == "still" and 0 or -1)
-			local stretch = current and stretches[current]
-			if stretch and abs(stretch.speed - speed) <= 1.5 then
-				stretch.duration = stretch.duration + step.dt
-				stretch.last = self.track[j].point
-				stretch.weighted = stretch.weighted + step.speed * step.dt
-			else
-				stretches[#stretches + 1] = { start = self.track[j - 1].t - self.start, duration = step.dt, speed = speed, first = self.track[j].point, last = self.track[j].point, weighted = step.speed * step.dt }
-				current = #stretches
-			end
-		end
-		local long = {}
-		for _, stretch in ipairs(stretches) do
-			if stretch.duration >= 1.5 then
-				long[#long + 1] = stretch
-			end
-		end
-		if #long > 1 or #stretches > 3 then
-			add(format("    the speed changed %d times, the stretches of 1.5 sec or longer:", #stretches - 1))
-			for shown, stretch in ipairs(long) do
-				if shown > 40 then
-					add(format("      and %d more", #long - 40))
-					break
-				end
-				local what = stretch.speed < 0 and "jumping" or (stretch.speed == 0 and "standing still" or format("%.1f yd/sec", stretch.duration > 0 and stretch.weighted / stretch.duration or stretch.speed))
-				add(format("      %s for %.1f sec: %s, from %s to %s", clock(stretch.start), stretch.duration, what, self:describePoint(points[stretch.first] or 0), self:describePoint(points[stretch.last] or 0)))
-			end
-		else
-			add("    the speed stayed the same during the flight")
-		end
-
-		-- stops
-		add("")
-		add("  Stops")
-		local stills = {}
-		for _, stretch in ipairs(stretches) do
-			if stretch.speed == 0 and stretch.duration >= 1 then
-				stills[#stills + 1] = stretch
-			end
-		end
-		-- the points that are stops, and how long we stood still at each (going by the stop nearest to where we stood still)
-		local stops, stopOrder = {}, {}
-		for i, id in ipairs(points) do
-			local p = d.points[id]
-			if p and hasFlag(p.flags, STOP) and p.delay ~= 0 then
-				stops[i] = 0
-				stopOrder[#stopOrder + 1] = i
-			end
-		end
-		for _, still in ipairs(stills) do
-			local nearest
-			for _, i in ipairs(stopOrder) do
-				if abs(still.first - i) <= 2 and (nearest == nil or abs(still.first - i) < abs(still.first - nearest)) then
-					nearest = i
-				end
-			end
-			if nearest then
-				stops[nearest] = stops[nearest] + still.duration
-			end
-		end
-		for _, i in ipairs(stopOrder) do
-			add(format("    %d. %s: stood still for %.1f sec near it", i, self:describePoint(points[i]), stops[i]))
-		end
-		if #stopOrder == 0 then
-			add("    none of the points the estimate was made from are stops")
-		end
-		add(format("    stood still for %.1f sec in total%s", self.stillTime, #stills > 0 and ":" or ""))
-		for _, still in ipairs(stills) do
-			add(format("      %s for %.1f sec near %s", clock(still.start), still.duration, self:describePoint(points[still.first] or 0)))
-		end
-
-		-- stopwatch
-		add("")
-		add("  Stopwatch")
-		local worst, resets, previous = 0, 0, nil
-		for _, s in ipairs(self.track) do
-			if s.timer > 0 then
-				local left = self.end_ - s.t
-				worst = max(worst, abs(s.timer - left))
-				if previous and abs((previous.timer - s.timer) - (s.t - previous.t)) > 1.5 then
-					resets = resets + 1
-				end
-				previous = s
-			end
-		end
-		add(format("    the time shown was off by up to %.1f sec and was changed %d times during the flight", worst, resets))
-
-		return concat(out, "\n")
-	end
+	-- the geometry the simulation gives the flight and what was seen of the paths, and the details of the flight to show
+	local folder = ctx.dir .. "/src/analysis/flight/"
+	dofile(folder .. "observe.lua")(ctx, Flight)
+	dofile(folder .. "report.lua")(ctx, Flight)
 
 	return Flight
 end

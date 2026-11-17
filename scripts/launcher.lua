@@ -1,6 +1,6 @@
 --[[
 
-Generates the db file of each game from the csv files in the `csv_<game>` folders, and svg files of each of its maps for visualization.
+Generates the db file of each game from the csv files in the `data/csv_<game>` folders, and svg files of each of its maps for visualization.
 
 	lua scripts/launcher.lua [options] [game ...]
 
@@ -19,6 +19,7 @@ local scriptPath = arg and arg[0] or "scripts/launcher.lua"
 local scriptDir = scriptPath:match("^(.*)[/\\][^/\\]*$") or "."
 local addonDir = scriptDir:match("^(.*)[/\\][^/\\]*$") or (scriptDir == "." and ".." or ".")
 local libDir = addonDir .. "/libs/TaxiTimerLib" -- the library has the db files
+local dataDir = scriptDir .. "/data" -- the csv files are read from here, and the svg files written
 
 -- the version of the library the db files are for, so they are only used with it
 local libMinor ---@type number?
@@ -34,7 +35,7 @@ do
 	end
 end
 
-local taxiparser = dofile(scriptDir .. "/taxiparser.lua") ---@type TaxiParserModule
+local taxiparser = dofile(scriptDir .. "/src/taxiparser.lua") ---@type TaxiParserModule
 
 local clients = {} ---@type string[] The games to generate the files for.
 local svg = true
@@ -73,8 +74,8 @@ local function ensureDir(path)
 end
 
 for _, client in ipairs(clients) do
-	local csvPath = scriptDir .. "/csv_" .. client
-	local svgPath = (outDir or scriptDir) .. "/svg_" .. client
+	local csvPath = dataDir .. "/csv_" .. client
+	local svgPath = (outDir or dataDir) .. "/svg_" .. client
 	local dbPath = (outDir or libDir) .. "/db_" .. client .. ".lua"
 
 	-- skip if the csv files of the game don't exist
