@@ -1,6 +1,6 @@
 local addonName = ... ---@type string
 
-local lib = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
+local TTL = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
 
 ---@param text string
 local function print(text, ...)
@@ -18,10 +18,17 @@ end
 local SV do
 
 	---@class TaxiTimerDBOptions
-	---@field public debug boolean
-	---@field public record boolean
-	---@field public mode VisualizationMode
+	---@field public debug boolean Enable debug which may display additional elements.
+	---@field public record boolean Enable dumping of flight records for later anaysis.
+	---@field public mode VisualizationMode How the flight is shown.
 	---@field public bar VisualizationBarPoint
+	---@field public timer boolean If the bar shows the time left.
+	---@field public timerPosition FramePoint The position of the time left.
+	---@field public timerOutline boolean If the time left has an outline.
+	---@field public destination boolean If the bar shows where the flight goes.
+	---@field public destinationPosition FramePoint
+	---@field public destinationOutline boolean If the destination has an outline.
+	---@field public checkpoints boolean If the bar shows the taxi nodes along the way.
 
 	---@alias TaxiTimerDBFlights FlightRecord[]
 
@@ -38,6 +45,13 @@ local SV do
 			record = false,
 			mode = "bar",
 			bar = { "TOP", "TOP", 0, -110 },
+			timer = true,
+			timerPosition = "CENTER",
+			timerOutline = false,
+			destination = false,
+			destinationPosition = "TOP",
+			destinationOutline = false,
+			checkpoints = false,
 		},
 		flights = {},
 	}
@@ -67,7 +81,13 @@ local SV do
 				TaxiTimerDB[k] = CopyTable(v)
 			end
 		end
-		setmetatable(TaxiTimerDB.options, { __index = TaxiTimerDBDefaults.options })
+		local options = TaxiTimerDB.options
+		setmetatable(options, { __index = TaxiTimerDBDefaults.options })
+		-- upgrade "details" into "bar" mode and adjust key settings to match the old details behavior
+		if rawget(options, "mode") == "details" then
+			options.mode = "bar"
+			options.checkpoints = true
+		end
 	end
 
 	---@generic T extends keyof TaxiTimerDB
@@ -75,6 +95,18 @@ local SV do
 	---@return TaxiTimerDB[T]
 	function SV:Get(key)
 		return TaxiTimerDB[key]
+	end
+
+	---@return TaxiTimerDBOptions
+	function SV:GetOptions()
+		return self:Get("options")
+	end
+
+	---@generic T extends keyof TaxiTimerDBOptions
+	---@param key T
+	---@return TaxiTimerDBOptions[T]
+	function SV:GetDefaultOption(key)
+		return TaxiTimerDBDefaults.options[key]
 	end
 
 	---@param flight FlightRecord
@@ -111,7 +143,7 @@ end
 ---@class Visualization
 local Visualization do
 
-	---@alias VisualizationMode "off"|"stopwatch"|"bar"|"details"
+	---@alias VisualizationMode "off"|"stopwatch"|"bar"
 
 	---@alias VisualizationBarPoint { [1]: FramePoint, [2]: FramePoint, [3]: number, [4]: number }
 
@@ -318,8 +350,7 @@ local Visualization do
 	local MODES = {
 		off = true, -- nothing
 		stopwatch = true, -- default UI stopwatch
-		bar = true, -- bar with time left
-		details = true, -- bar with time left and visualization of the checkpoints along the way and progress
+		bar = true,
 	}
 
 	--
@@ -409,7 +440,7 @@ local Visualization do
 	---@return TaxiTimerLib-1.0_FlightCheckpoint[]
 	function Progress:GetCheckpoints()
 		if not self.checkpoints and self.flight then
-			self.checkpoints = lib.GetFlightCheckpoints(self.flight)
+			self.checkpoints = TTL.GetFlightCheckpoints(self.flight)
 		end
 		return self.checkpoints or {}
 	end
@@ -527,14 +558,16 @@ local Visualization do
 	local INTERPOLATION = Enum.StatusBarInterpolation and Enum.StatusBarInterpolation.ExponentialEaseOut -- the smoothing of the status bar, nothing on a client without it
 
 	local activeMode ---@type VisualizationMode? The mode the flight that is going on (or the last one) began with.
+	local example ---@type number? When the example was shown, nothing if it is not.
+	local exampleLeft = 0 -- the seconds left of the example last time, to tell when it begins again
+	local editing = false -- if the Edit Mode is open, which is when the example is shown whenever there is no real flight
 
-	---@return VisualizationMode
-	local function GetSanitizedMode()
+	Visualization = {}
+
+	function Visualization:GetSavedMode()
 		local mode = SV:GetOption("mode")
 		return mode and MODES[mode] and mode or "stopwatch"
 	end
-
-	Visualization = {}
 
 	-- The bar and what is on it. `bar:Create` makes all of it together, so while `bar.frame` exists so does the rest and the code that runs with a frame does not nil-check them.
 	-- The ones that can be missing (the atlas textures of the spark and the flash) are nilable, and are checked where they are used.
@@ -543,6 +576,7 @@ local Visualization do
 	---@field public fill StatusBar
 	---@field public label FontString
 	---@field public delta FontString How far the flight is from the simulation when debugging, beside the bar so it does not move the time.
+	---@field public destination FontString Where the flight goes, above the bar.
 	---@field public isOff boolean If the delta is shown, which it stays at until the flight is close to the simulation again so it does not come and go.
 	---@field public clockNotch VisualizationNotch The notch of the clock, when debugging.
 	---@field public spark? Texture The edge of the fill, not there without the atlases.
@@ -562,7 +596,7 @@ local Visualization do
 	---@param seconds number
 	---@return string
 	local function TimeLeftText(seconds)
-		return lib.GameAPI.FormatDuration(ceil(seconds), true)
+		return TTL.GameAPI.FormatDuration(ceil(seconds), true)
 	end
 
 	-- The seconds the flight has gone on by the clock, for the clock notch and the delta beside the bar, which are only there when debugging once the flight is going (nothing otherwise).
@@ -788,7 +822,7 @@ local Visualization do
 		local behind = flown - progress.elapsed
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:AddLine("Clock", 1, 0.25, 0.25)
-		GameTooltip:AddLine(format("%s flown, the simulation says %s", lib.GameAPI.FormatDuration(floor(flown), true), lib.GameAPI.FormatDuration(floor(progress.elapsed), true)), 0.8, 0.8, 0.8)
+		GameTooltip:AddLine(format("%s flown, the simulation says %s", TTL.GameAPI.FormatDuration(floor(flown), true), TTL.GameAPI.FormatDuration(floor(progress.elapsed), true)), 0.8, 0.8, 0.8)
 		GameTooltip:AddLine(format("%.1f sec %s the simulation", abs(behind), behind >= 0 and "behind" or "ahead of"), 1, 1, 1)
 		GameTooltip:Show()
 	end
@@ -796,6 +830,9 @@ local Visualization do
 	--
 	-- MARK: The bar
 	--
+
+	local TEXT_FONT = "SystemFont_Shadow_Med2"
+	local TEXT_FONT_OUTLINE = "SystemFont_Outline_Med2"
 
 	-- Makes a notch along the fill of the bar, `parent` being the bar which is not `bar.frame` yet as the first notch is made while the bar is being created.
 	---@param parent Frame
@@ -859,13 +896,15 @@ local Visualization do
 		local text = CreateFrame("Frame", nil, f)
 		text:SetAllPoints()
 		text:SetFrameLevel(f:GetFrameLevel() + 20)
-		self.label = text:CreateFontString(nil, "OVERLAY", "SystemFont_Shadow_Med2")
-		self.label:SetPoint("CENTER")
+		self.label = text:CreateFontString(nil, "OVERLAY", TEXT_FONT)
 		self.label:SetTextColor(1, 1, 1)
 
-		self.delta = f:CreateFontString(nil, "OVERLAY", "SystemFont_Shadow_Med2")
+		self.delta = f:CreateFontString(nil, "OVERLAY", TEXT_FONT)
 		self.delta:SetPoint("LEFT", f, "RIGHT", 6, 0)
 		self.delta:SetTextColor(1, 0.25, 0.25)
+
+		self.destination = text:CreateFontString(nil, "OVERLAY", TEXT_FONT)
+		self.destination:SetTextColor(1, 1, 1)
 
 		-- where the simulation says we are when the flight is going by the clock alone, to compare with where we are going by our position
 		self.clockNotch = self:CreateNotch(f, ClockTooltip, overlay:GetFrameLevel() + 6)
@@ -894,6 +933,8 @@ local Visualization do
 		local saved = SV:GetOption("bar")
 		f:ClearAllPoints()
 		f:SetPoint(saved[1], UIParent, saved[2], saved[3], saved[4])
+		self:PlaceTexts(f)
+		f:Hide()
 
 		self.frame = f
 		return f
@@ -927,11 +968,11 @@ local Visualization do
 		self:Empty()
 	end
 
-	-- Lays the bar out for a flight: what the last one left is taken away and, with `details`, a notch is put at each taxi node of the route.
+	-- Lays the bar out for a flight: what the last one left is taken away and, with `notches`, a notch is put at each taxi node of the route.
 	---@param frame VisualizationFrame
 	---@param checkpoints TaxiTimerLib-1.0_FlightCheckpoint[]
-	---@param details boolean
-	function bar:Layout(frame, checkpoints, details)
+	---@param notches boolean
+	function bar:Layout(frame, checkpoints, notches)
 		self.flashToken = self.flashToken + 1
 		if self.flash and self.flashAnim then
 			self.flashAnim:Stop()
@@ -949,7 +990,7 @@ local Visualization do
 			notch:Hide()
 		end
 
-		if details then
+		if notches then
 			-- a notch at each taxi node of the route, the first is where we start and the last is where we land
 			local numCheckpoints = #checkpoints
 			for i = 1, numCheckpoints do
@@ -1046,6 +1087,80 @@ local Visualization do
 		end
 	end
 
+	-- Where the flight goes.
+	---@param text string
+	function bar:SetDestination(text)
+		self.destination:SetText(text)
+	end
+
+	local TEXT_GAP = 4 -- pixels between the bar and a text above or below it, and between the texts
+	local TEXT_INSET = 6 -- pixels from the end of the bar to a text on it
+	local TEXT_BELOW_TRIM = 3 -- pixels removed below the bar (to keep roughly the same distance as when placed above)
+
+	-- A text can be in any of nine places: above the bar (`TOPLEFT`, `TOP`, `TOPRIGHT`), on it (`LEFT`, `CENTER`, `RIGHT`) or below it (`BOTTOMLEFT`, `BOTTOM`, `BOTTOMRIGHT`).
+	---@param point FramePoint
+	---@return "above"|"inside"|"below" row
+	---@return "LEFT"|"RIGHT"|"" side
+	local function SplitPoint(point)
+		local row = point:find("^TOP") and "above" or point:find("^BOTTOM") and "below" or "inside"
+		local side = point:find("LEFT$") and "LEFT" or point:find("RIGHT$") and "RIGHT" or ""
+		return row, side
+	end
+
+	-- Puts a text in a place, `offset` pixels further out from the bar if it is above or below it.
+	---@param frame Frame The bar.
+	---@param text FontString
+	---@param point FramePoint
+	---@param offset number
+	local function PlaceText(frame, text, point, offset)
+		local row, side = SplitPoint(point)
+		text:ClearAllPoints()
+		text:SetJustifyH(side == "" and "CENTER" or side)
+		if row == "above" then
+			text:SetPoint("BOTTOM" .. side --[[@as FramePoint]], frame, "TOP" .. side --[[@as FramePoint]], 0, TEXT_GAP + offset)
+		elseif row == "below" then
+			text:SetPoint("TOP" .. side --[[@as FramePoint]], frame, "BOTTOM" .. side --[[@as FramePoint]], 0, TEXT_BELOW_TRIM - TEXT_GAP - offset)
+		else
+			local anchor = (side == "" and "CENTER" or side) --[[@as FramePoint]]
+			text:SetPoint(anchor, frame, anchor, side == "LEFT" and TEXT_INSET or side == "RIGHT" and -TEXT_INSET or 0, 0)
+		end
+	end
+
+	-- Puts the time and the destination where the player wishes. If they are in the same place they share it: above or below the bar one is over the other with the time next to the bar, and on the bar they are side by side with the destination first.
+	---@param frame Frame The bar.
+	function bar:PlaceTexts(frame)
+		local timer, destination = self.label, self.destination
+		timer:SetFontObject(SV:GetOption("timerOutline") and TEXT_FONT_OUTLINE or TEXT_FONT)
+		destination:SetFontObject(SV:GetOption("destinationOutline") and TEXT_FONT_OUTLINE or TEXT_FONT)
+		timer:SetTextColor(1, 1, 1) -- a font brings its own color
+		destination:SetTextColor(1, 1, 1)
+		local timerPoint, destinationPoint = SV:GetOption("timerPosition"), SV:GetOption("destinationPosition")
+		PlaceText(frame, timer, timerPoint, 0)
+		if not (SV:GetOption("timer") and SV:GetOption("destination") and timerPoint == destinationPoint) then
+			PlaceText(frame, destination, destinationPoint, 0)
+			return
+		end
+		local row, side = SplitPoint(timerPoint)
+		if row ~= "inside" then
+			PlaceText(frame, destination, destinationPoint, select(2, timer:GetFont()) + 2)
+			return
+		end
+		destination:ClearAllPoints()
+		if side == "LEFT" then
+			destination:SetPoint("LEFT", frame, "LEFT", TEXT_INSET, 0)
+			timer:ClearAllPoints()
+			timer:SetPoint("LEFT", destination, "RIGHT", TEXT_GAP * 2, 0)
+		elseif side == "RIGHT" then
+			destination:SetPoint("RIGHT", timer, "LEFT", -TEXT_GAP * 2, 0)
+		else
+			destination:SetPoint("RIGHT", frame, "CENTER", -TEXT_GAP, 0)
+			destination:SetJustifyH("RIGHT")
+			timer:ClearAllPoints()
+			timer:SetPoint("LEFT", frame, "CENTER", TEXT_GAP, 0)
+			timer:SetJustifyH("LEFT")
+		end
+	end
+
 	-- What is flown of the route up to the last taxi node we passed.
 	---@param seconds number
 	function bar:SetDone(seconds)
@@ -1111,7 +1226,7 @@ local Visualization do
 	-- The mode of the flight that is going on, or of the last one, as it is looked up when a flight starts so changing it does not change a flight on its way.
 	---@return VisualizationMode
 	function Visualization:GetMode()
-		activeMode = activeMode or GetSanitizedMode()
+		activeMode = activeMode or self:GetSavedMode()
 		return activeMode
 	end
 
@@ -1124,8 +1239,7 @@ local Visualization do
 	-- If the bar is shown in place of the stopwatch.
 	---@return boolean
 	function Visualization:IsBarEnabled()
-		local mode = self:GetMode()
-		return mode == "bar" or mode == "details"
+		return self:GetMode() == "bar"
 	end
 
 	-- The stop is not asked for any more.
@@ -1134,24 +1248,55 @@ local Visualization do
 		bar:ClearStopMarks()
 	end
 
+	-- Lays the bar out for the flight we have, with what the player wishes to see on it.
+	---@param frame VisualizationFrame
+	local function LayOut(frame)
+		local flight = progress.flight
+		ClearStop()
+		bar:Layout(frame, progress:GetCheckpoints(), SV:GetOption("checkpoints"))
+		bar:SetDestination(flight and flight.nodes[#flight.nodes] and NodeName(flight.nodes[#flight.nodes]) or "")
+		bar:PlaceTexts(frame)
+		bar:Empty()
+		frame:Show()
+	end
+
 	-- Lays out the bar for the flight we have.
 	function Visualization:Build()
 		if not progress.flight or not self:IsBarEnabled() then
 			bar:Hide()
 			return
 		end
-
-		local frame = bar:Create()
-		ClearStop()
-		bar:Layout(frame, progress:GetCheckpoints(), self:GetMode() == "details")
-		bar:Empty()
-		frame:Show()
+		LayOut(bar:Create())
 		self:Refresh()
+	end
+
+	-- What is shown of the options changed, for the flight that is going on or for the example.
+	function Visualization:Apply()
+		if not bar.frame or not progress.flight then
+			return
+		end
+		if example then
+			LayOut(bar.frame)
+			self:Refresh()
+			return
+		end
+		local stopAt, stopIndex = progress.stopAt, progress.stopIndex
+		self:Build()
+		-- laying the bar out takes a stop that was asked for away, and it is still asked for
+		if stopAt and stopIndex and bar.frame:IsShown() then
+			progress:SetStop(stopIndex)
+			bar:MarkStop(stopAt, stopIndex)
+		end
+	end
+
+	function Visualization:GetFrame()
+		return bar:Create()
 	end
 
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	function Visualization:Start(info)
-		activeMode = GetSanitizedMode()
+		self:HideExample()
+		activeMode = self:GetSavedMode()
 		progress:Start(info)
 		bar:ClearStopMarks()
 		if bar.frame then
@@ -1181,6 +1326,14 @@ local Visualization do
 		end
 		if bar.frame then
 			bar:Finish(landedAt, finished and wasFlying or false)
+		end
+		if editing then
+			-- the example comes back when the bar has gone
+			C_Timer.After(FLASH_SECONDS, function()
+				if editing and not progress.flight then
+					self:ShowExample()
+				end
+			end)
 		end
 	end
 
@@ -1214,12 +1367,79 @@ local Visualization do
 		progress:SetPosition(seconds, GetTime(), not self:IsStopwatchEnabled())
 	end
 
+	--
+	-- MARK: Example for Edit Mode
+	--
+
+	---@type TaxiTimerLib-1.0_FlightCheckpoint[]
+	local EXAMPLE_CHECKPOINTS = {
+		{ nodeID = 1, name = "Departure", lands = true, pointIndex = 1, distance = 0, time = 0 },
+		{ nodeID = 2, name = "First stop", lands = false, pointIndex = 1, distance = 0, time = 34 },
+		{ nodeID = 3, name = "Second stop", lands = false, pointIndex = 1, distance = 0, time = 61 },
+		{ nodeID = 4, name = "Destination", lands = true, pointIndex = 1, distance = 0, time = 90 },
+	}
+
+	---@type Partial<TaxiTimerLib-1.0_FlightInfo>
+	local EXAMPLE_FLIGHT = {
+		duration = 90,
+		nodes = EXAMPLE_CHECKPOINTS,
+	}
+
+	local EXAMPLE_DIMMED = 0.35
+
+	function Visualization:ShowExample()
+		if progress.flight and not example then
+			return
+		end
+		local frame = bar:Create()
+		example, exampleLeft = GetTime(), EXAMPLE_FLIGHT.duration
+		progress:Start(EXAMPLE_FLIGHT)
+		progress.checkpoints = EXAMPLE_CHECKPOINTS
+		progress:Takeoff(example)
+		LayOut(frame)
+		self:Refresh()
+	end
+
+	function Visualization:HideExample()
+		if not example then
+			return
+		end
+		example = nil
+		progress:End()
+		local frame = bar.frame
+		if frame then
+			frame:SetAlpha(1)
+		end
+		bar:Hide()
+	end
+
+	-- The Edit Mode was opened or closed. While it is open the example is shown, but a real flight comes first, and the example is back when it has landed.
+	---@param on boolean
+	function Visualization:SetEditing(on)
+		editing = on
+		if on then
+			self:ShowExample()
+		else
+			self:HideExample()
+		end
+	end
+
 	function Visualization:Refresh()
 		local info = progress.flight
 		if not bar.frame or not info then
 			return
 		end
 		local now = GetTime()
+		if example then
+			-- the example flies by the clock, over and over
+			local left = info.duration - (now - example) % info.duration
+			if left > exampleLeft then
+				LayOut(bar.frame)
+			end
+			exampleLeft = left
+			progress:SetPosition(left, now, true)
+			bar.frame:SetAlpha(self:GetSavedMode() == "bar" and 1 or EXAMPLE_DIMMED)
+		end
 		-- where we are is only known every half second, so the bar goes on at the speed of the simulation until then
 		local shown, missed = progress:Advance(now)
 		if missed then
@@ -1229,10 +1449,12 @@ local Visualization do
 		bar:SetFill(shown / info.duration, started)
 		bar:SetSpark(shown / info.duration, started)
 		bar.label:SetText(TimeLeftText(progress:SecondsLeft(now)))
+		bar.label:SetShown(SV:GetOption("timer"))
+		bar.destination:SetShown(SV:GetOption("destination"))
 		local clock = ClockSeconds()
 		bar:SetClock(clock, clock and clock - progress.elapsed)
 		bar:RefreshTooltip(now)
-		if progress.checkpoints and self:GetMode() == "details" then
+		if progress.checkpoints and SV:GetOption("checkpoints") then
 			bar:SetDone(progress:Passed()) -- up to the last taxi node we passed
 			for _, notch in ipairs(bar.notches) do
 				notch:Pass(progress.elapsed)
@@ -1454,7 +1676,7 @@ local Recorder do
 				version = RECORD_VERSION,
 				addon = C_AddOns.GetAddOnMetadata(addonName, "Version") or "",
 				project = WOW_PROJECT_ID,
-				flavor = lib.Sim.FLAVOR,
+				flavor = TTL.Sim.FLAVOR,
 				build = tonumber((select(2, GetBuildInfo()))) or 0,
 				time = GetServerTime(),
 				area = areaID,
@@ -1522,7 +1744,7 @@ local Recorder do
 		if not flight or not flight.record.firstTaxi or flight.record.early then
 			return
 		end
-		local checkpoints = lib.GetFlightCheckpoints(flight.info)
+		local checkpoints = TTL.GetFlightCheckpoints(flight.info)
 		local flown = GetTime() - flight.record.clicked - flight.record.firstTaxi
 		if flown < checkpoints[#checkpoints - 1].time then
 			flight.record.early = Round(GetTime() - flight.record.clicked, 2)
@@ -1595,7 +1817,7 @@ local GPS do
 	---@param speedModifier? number
 	---@return number
 	local function GetLiveSpeed(areaID, speedModifier)
-		local speed = lib.Speed(areaID) * (speedModifier or 1)
+		local speed = TTL.Speed(areaID) * (speedModifier or 1)
 
 		if not areaID then
 			return speed
@@ -1704,7 +1926,7 @@ local GPS do
 			return
 		end
 		-- the time left goes by the speed of each stretch that is left, and if the whole flight is at one speed also by how much faster than expected we fly
-		local timeLeft = lib.GetFlightTimeLeft(info, self.distance)
+		local timeLeft = TTL.GetFlightTimeLeft(info, self.distance)
 		Visualization:SetProgress(timeLeft)
 		if not info.dynamicSpeed then
 			timeLeft = timeLeft * info.areaSpeed / speed
@@ -1831,7 +2053,7 @@ local State do
 	---@field public taxiNodeData TaxiNodeInfo
 
 	-- we utilize the library to keep track of the taxi map state (we just have to hook it up and call the API that updates the state)
-	State = setmetatable({}, { __index = function(_, key) return lib.GameAPI.TaxiMap[key] end }) ---@type State
+	State = setmetatable({}, { __index = function(_, key) return TTL.GameAPI.TaxiMap[key] end }) ---@type State
 
 	-- The taxi node the player points at or takes, nothing if the flight path is not reachable.
 	---@param node? TaxiNodeInfo
@@ -1860,7 +2082,7 @@ local State do
 		local lines = {} ---@type string[]
 		for i = 2, #route do
 			local from, to = route[i - 1].nodeID, route[i].nodeID
-			local trips = lib.GetBridgeCandidates(from, to)
+			local trips = TTL.GetBridgeCandidates(from, to)
 			if not trips[1] then
 				lines[#lines + 1] = format("No path %d > %d, and no trip between them", from, to)
 			elseif #trips[1] > 2 then
@@ -1905,13 +2127,13 @@ local State do
 			GameTooltip:AddLine(format("Recording: %s", SV:GetOption("record") and "Yes" or "No"), 0.8, 0.8, 0.8, false)
 			GameTooltip:AddLine(" ")
 		end
-		GameTooltip:AddLine(format("~ %s flight time", lib.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
+		GameTooltip:AddLine(format("~ %s flight time", TTL.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
 		GameTooltip:Show()
 	end
 
 	---@return TaxiTimerLib-1.0_FlightInfo?
 	function State:GetFlightInfo()
-		return lib.GameAPI.GetFlightInfoToNode(self.to)
+		return TTL.GameAPI.GetFlightInfoToNode(self.to)
 	end
 
 	-- Test all destinations if we properly detect a path, if not we'll report it in the chat.
@@ -1925,8 +2147,8 @@ local State do
 		for _, node in pairs(self.nodes) do
 			if node.state == Enum.FlightPathState.Reachable then
 				total = total + 1
-				local route, _, shown = lib.GameAPI.GetRouteNodes(node, from)
-				local info = lib.GameAPI.GetFlightInfoToNode(node, from)
+				local route, _, shown = TTL.GameAPI.GetRouteNodes(node, from)
+				local info = TTL.GameAPI.GetFlightInfoToNode(node, from)
 				local lines ---@type string[]?
 				if route and shown then
 					if not info then
@@ -1965,7 +2187,7 @@ local State do
 
 	---@param forceUpdate? boolean
 	function State:Update(forceUpdate)
-		if lib.GameAPI.UpdateTaxiMap(forceUpdate) then
+		if TTL.GameAPI.UpdateTaxiMap(forceUpdate) then
 			self.to = nil
 		end
 		if forceUpdate and SV:GetOption("debug") then
@@ -2031,6 +2253,253 @@ local Frames do
 
 end
 
+---@class SettingsUI
+local SettingsUI do
+
+	---@class SettingsUIOption
+	---@field key keyof TaxiTimerDBOptions
+	---@field kind "dropdown"|"checkbox"
+	---@field name string
+	---@field tooltip string
+	---@field options? { value: string, text: string }[] What can be chosen, for a dropdown.
+	---@field barOnly? boolean If it is for the bar, so it is only there while the bar is what flights are shown as.
+	---@field under? string The option that has to be on for this one to be there.
+
+	---@type { value: FramePoint, text: string }[]
+	local Positions = {
+		{ value = "TOPLEFT", text = "Above, left" },
+		{ value = "TOP", text = "Above, center" },
+		{ value = "TOPRIGHT", text = "Above, right" },
+		{ value = "LEFT", text = "On the bar, left" },
+		{ value = "CENTER", text = "On the bar, center" },
+		{ value = "RIGHT", text = "On the bar, right" },
+		{ value = "BOTTOMLEFT", text = "Below, left" },
+		{ value = "BOTTOM", text = "Below, center" },
+		{ value = "BOTTOMRIGHT", text = "Below, right" },
+	}
+
+	---@type SettingsUIOption[]
+	local SettingsOptions = {
+		{
+			key = "mode",
+			kind = "dropdown",
+			name = "Show flights as",
+			tooltip = "How the time of a flight is shown: the bar, the stopwatch of the game, or not at all.",
+			options = {
+				{ value = "off", text = "Off" },
+				{ value = "bar", text = "Bar" },
+				{ value = "stopwatch", text = "Stopwatch" },
+			},
+		},
+		{
+			key = "timer",
+			kind = "checkbox",
+			name = "Show timer",
+			tooltip = "The time left of the flight on the bar.",
+			barOnly = true,
+		},
+		{
+			key = "timerPosition",
+			kind = "dropdown",
+			name = "Timer position",
+			tooltip = "Where the time left is: above the bar, on it or below it. If the destination is in the same place they share it.",
+			options = Positions,
+			barOnly = true,
+			under = "timer",
+		},
+		{
+			key = "timerOutline",
+			kind = "checkbox",
+			name = "Timer outline",
+			tooltip = "Draws an outline around the time left, to read it better against what is behind it.",
+			barOnly = true,
+			under = "timer",
+		},
+		{
+			key = "destination",
+			kind = "checkbox",
+			name = "Show destination",
+			tooltip = "Where the flight goes.",
+			barOnly = true,
+		},
+		{
+			key = "destinationPosition",
+			kind = "dropdown",
+			name = "Destination position",
+			tooltip = "Where the destination is: above the bar, on it or below it. If the timer is in the same place they share it.",
+			options = Positions,
+			barOnly = true,
+			under = "destination",
+		},
+		{
+			key = "destinationOutline",
+			kind = "checkbox",
+			name = "Destination outline",
+			tooltip = "Draws an outline around the destination, to read it better against what is behind it.",
+			barOnly = true,
+			under = "destination",
+		},
+		{
+			key = "checkpoints",
+			kind = "checkbox",
+			name = "Show checkpoints",
+			tooltip = "The taxi nodes of the route along the bar, that light up as they are passed.",
+			barOnly = true,
+		},
+	}
+
+	local function IsBar()
+		return SV:GetOption("mode") == "bar"
+	end
+
+	-- If an option is there: the ones for the bar only while the bar is shown, and the ones under another option only while that is on.
+	---@param option SettingsUIOption
+	---@return boolean
+	local function IsShown(option)
+		return (not option.barOnly or IsBar()) and (not option.under or SV:GetOption(option.under) == true)
+	end
+
+	-- If other options come and go with this one, so the dialog has to be drawn again when it changes.
+	---@param key string
+	---@return boolean
+	local function HasOptionsUnder(key)
+		if key == "mode" then
+			return true
+		end
+		for _, option in ipairs(SettingsOptions) do
+			if option.under == key then
+				return true
+			end
+		end
+		return false
+	end
+
+	local function OnChange()
+		Visualization:Apply()
+	end
+
+	--
+	-- MARK: Edit Mode
+	--
+
+	local function InitEditMode()
+		local LEM = LibStub("LibEditMode", true) ---@type LibEditModePolyfill?
+		if not LEM then
+			return
+		end
+
+		local frame = Visualization:GetFrame()
+		local default = SV:GetDefaultOption("bar")
+
+		LEM:AddFrame(
+			frame,
+			function(_, _, point, x, y)
+				SV:SetOption("bar", { point, point, x, y })
+			end,
+			{
+				point = default[1],
+				x = default[3],
+				y = default[4],
+			},
+			addonName
+		)
+
+		local settings = {} ---@type LibEditModeSettingObject[]
+
+		for _, item in ipairs(SettingsOptions) do
+			---@type LibEditModeSettingObject
+			local setting = {
+				kind = item.kind == "dropdown" and LEM.SettingType.Dropdown or LEM.SettingType.Checkbox,
+				name = item.name,
+				desc = item.tooltip,
+				default = SV:GetDefaultOption(item.key),
+				get = function()
+					return SV:GetOption(item.key)
+				end,
+				set = function(_, value)
+					SV:SetOption(item.key, value)
+					OnChange()
+					if HasOptionsUnder(item.key) then
+						LEM:RefreshFrameSettings(frame)
+					end
+				end,
+				hidden = (item.barOnly or item.under) and function() return not IsShown(item) end or nil,
+			}
+			if item.kind == "dropdown" then
+				setting.values = item.options
+			end
+			settings[#settings + 1] = setting
+		end
+
+		LEM:AddFrameSettings(frame, settings)
+
+		LEM:RegisterCallback("enter", function()
+			Visualization:SetEditing(true)
+		end)
+
+		LEM:RegisterCallback("exit", function()
+			Visualization:SetEditing(false)
+		end)
+
+		if LEM:IsInEditMode() then
+			Visualization:SetEditing(true)
+		end
+	end
+
+	--
+	-- MARK: Settings Panel
+	--
+
+	local function InitSettingsPanel()
+		if not Settings or not Settings.RegisterVerticalLayoutCategory then
+			return
+		end
+
+		local category = Settings.RegisterVerticalLayoutCategory(addonName)
+		local initializers = {} ---@type table<string, table>
+
+		for _, item in ipairs(SettingsOptions) do
+			local setting = Settings.RegisterAddOnSetting(
+				category,
+				"TAXITIMER_" .. item.key:upper(),
+				item.key,
+				SV:GetOptions(),
+				item.kind == "dropdown" and Settings.VarType.String or Settings.VarType.Boolean,
+				item.name,
+				SV:GetDefaultOption(item.key)
+			)
+			setting:SetValueChangedCallback(OnChange)
+			local initializer
+			if item.kind == "dropdown" then
+				initializer = Settings.CreateDropdown(category, setting, function()
+					local container = Settings.CreateControlTextContainer()
+					for _, option in ipairs(item.options or {}) do
+						container:Add(option.value, option.text)
+					end
+					return container:GetData()
+				end, item.tooltip)
+			else
+				initializer = Settings.CreateCheckbox(category, setting, item.tooltip)
+			end
+			initializers[item.key] = initializer
+			local parent = initializers[item.under or "mode"]
+			if parent and (item.barOnly or item.under) then
+				initializer:SetParentInitializer(parent, function() return IsShown(item) end)
+			end
+		end
+
+		Settings.RegisterAddOnCategory(category)
+	end
+
+	SettingsUI = {}
+
+	function SettingsUI:Init()
+		InitEditMode()
+		InitSettingsPanel()
+	end
+
+end
+
 ---@class AddOnFrame : Frame
 local AddOn do
 
@@ -2041,6 +2510,7 @@ local AddOn do
 
 		if event == "ADDON_LOADED" and ... == addonName then
 			SV:Init()
+			SettingsUI:Init()
 		end
 
 		local numLoaded, numTotal = 0, 0
@@ -2074,25 +2544,17 @@ local AddOn do
 
 	---@param message string?
 	SlashCmdList[addonName] = function(message)
-		---@type "debug"|"record"|"mode"?, string
-		local command, arg1 = strmatch(strlower(message or ""), "^%s*(%S+)%s*(%S*)")
+		---@type "debug"|"record"?, string
+		local command = strmatch(strlower(message or ""), "^%s*(%S+)")
 		if command then
 			if command == "debug" or command == "record" then
 				local newValue = not SV:GetOption(command)
 				SV:SetOption(command, newValue)
 				print("%s %s %s.", addonName, command, newValue and "enabled" or "disabled")
 				return
-			elseif command == "mode" then
-				if Visualization:SetMode(arg1) then
-					print("%s shows flights as: %s.", addonName, arg1)
-				else
-					print("%s modes: off, stopwatch, bar, details.", addonName)
-				end
-				return
 			end
 		end
 		print("%s commands:", addonName)
-		print("    |cffFFFFFFmode|r    (|cffFFFFFF%s|r) Flight timer style.", tostring(SV:GetOption("mode")))
 		print("    |cffFFFFFFdebug|r   (|cffFFFFFF%s|r) Enable destination tooltip information.", tostring(SV:GetOption("debug")))
 		print("    |cffFFFFFFrecord|r  (|cffFFFFFF%s|r) Records flights for later analysis.", tostring(SV:GetOption("record")))
 	end
@@ -2104,7 +2566,7 @@ end
 -- You may also use the `LibStub("TaxiTimerLib-1.0")` approach instead.
 ---@class TaxiTimerAPI
 _G.TaxiTimerAPI = {
-	GetNodeFromSlotIndex = function(...) return lib.GameAPI.GetNodeFromSlotIndex(...) end,
-	GetFlightInfo = function(...) return lib.GameAPI.GetFlightInfo(...) end,
-	GetFlightTime = function(...) return lib.GameAPI.GetFlightTime(...) end,
+	GetNodeFromSlotIndex = function(...) return TTL.GameAPI.GetNodeFromSlotIndex(...) end,
+	GetFlightInfo = function(...) return TTL.GameAPI.GetFlightInfo(...) end,
+	GetFlightTime = function(...) return TTL.GameAPI.GetFlightTime(...) end,
 }
