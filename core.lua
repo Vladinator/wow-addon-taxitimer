@@ -1413,9 +1413,9 @@ local Recorder do
 		return index
 	end
 
-	---@param state State
+	---@param areaID? number The taxi map.
 	---@param info TaxiTimerLib-1.0_FlightInfo
-	function Recorder:Start(state, info)
+	function Recorder:Start(areaID, info)
 		current = nil
 		if not SV:GetOption("record") then
 			return
@@ -1457,7 +1457,7 @@ local Recorder do
 				flavor = lib.Sim.FLAVOR,
 				build = tonumber((select(2, GetBuildInfo()))) or 0,
 				time = GetServerTime(),
-				area = state.areaID,
+				area = areaID,
 				route = route,
 				trips = trips,
 				points = points,
@@ -1551,7 +1551,7 @@ local GPS do
 
 	local TAXI_MAX_MAP_CHANGE = 30 -- seconds we wait for a flight to carry on after it left the taxi on its way to another map (the game takes us off the taxi while the next map loads)
 	local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards we must be away from the destination for the flight to be on its way to another map and not have ended
-	local TAXI_MAX_SLEEP = 30 -- seconds before we give up waiting on the taxi to start (can happen if lag, or other conditions not being met as we click to fly somewhere)
+	local TAXI_WARMUP = 30 -- seconds a flight that was asked for can wait for us to get on the taxi before we let it go (the game refuses it if we are in combat, too far away or already flying, or lagging, or other conditions which don't say so)
 
 	local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
 	local TAXI_TIME_CORRECT_INTERVAL = 2 -- adjusts the timer X amount of times during flight to better calculate actual arrival time (some taxi paths slow down at start, or speed up eventually, this causes some seconds differences, this aims to counter that a bit)
@@ -1566,14 +1566,14 @@ local GPS do
 	---@field public chunk number The distance between the corrections.
 	---@field public adjustments number The seconds the timer was changed by in all.
 
-	-- The flight that is going on, followed on every tick of the GPS.
+	-- The flight that was asked for, followed on every tick of the GPS. It is warming up until we are on the taxi, then it is going on.
 	---@class GPSFlight
-	---@field public state State
+	---@field public areaID? number The taxi map.
 	---@field public info TaxiTimerLib-1.0_FlightInfo
 	---@field public ticker FunctionContainer
 	---@field public travelScale number What we travel is seen from above, so it is scaled to match the flight distance that includes climbing and descending.
-	---@field public wasOnTaxi boolean
-	---@field public waitingOnTaxi number `GetTime()` when we began to wait for the taxi.
+	---@field public wasOnTaxi boolean If we got on the taxi, which is when the flight is going on and it shows.
+	---@field public waitingOnTaxi number `GetTime()` when the flight was asked for.
 	---@field public distance number The yards left of the flight.
 	---@field public timeCorrection? GPSTimeCorrection
 	---@field public stopwatchSet boolean If the timer was started at least once.
@@ -1604,12 +1604,12 @@ local GPS do
 		return max(GetUnitSpeed("player"), speed)
 	end
 
-	---@param state State
+	---@param areaID? number
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	---@return GPSFlight
-	function Flight.New(state, info)
+	function Flight.New(areaID, info)
 		local self = setmetatable({
-			state = state,
+			areaID = areaID,
 			info = info,
 			travelScale = info.distance2D > 0 and info.distance / info.distance2D or 1,
 			wasOnTaxi = false,
@@ -1719,13 +1719,24 @@ local GPS do
 		self.stopwatchSet = true
 	end
 
-	-- We are on the taxi: the bar starts, and where we are tells how far we got since the last tick.
-	function Flight:Fly()
-		Visualization:Takeoff()
+	-- We got on the taxi, so the flight is real: the bar and the timer begin.
+	function Flight:Board()
 		self.wasOnTaxi = true
+		Visualization:Start(self.info)
+		if self.info.donotadjustarrivaltime then
+			Timer:Start(self.info.duration, true)
+		end
+	end
+
+	-- We are on the taxi: the bar runs, and where we are tells how far we got since the last tick.
+	function Flight:Fly()
+		if not self.wasOnTaxi then
+			self:Board()
+		end
+		Visualization:Takeoff()
 		local now = GetTime()
 		self.lastOnTaxi = now
-		local speed = GetLiveSpeed(self.state.areaID, self.info.speedModifier)
+		local speed = GetLiveSpeed(self.areaID, self.info.speedModifier)
 		local x, y, z, mapID = UnitPosition("player")
 		if self.lastTick then
 			local step = self:Step(x, y, mapID)
@@ -1756,12 +1767,22 @@ local GPS do
 		FlashClientIcon(true)
 	end
 
+	-- The flight did not begin.
+	function Flight:Discard()
+		Recorder:Stop()
+		self.ticker:Cancel()
+		flight = nil
+	end
+
+	-- Ticks are called from a timer to regularly update our state.
 	function Flight:Tick()
 		if UnitOnTaxi("player") then
 			self:Fly()
 		elseif not self.wasOnTaxi then
 			Recorder:Idle()
-			self.wasOnTaxi = GetTime() - self.waitingOnTaxi > TAXI_MAX_SLEEP
+			if GetTime() - self.waitingOnTaxi > TAXI_WARMUP then
+				self:Discard()
+			end
 		elseif self:IsChangingMap() then
 			self.lastX = nil -- the flight carries on once the next map has loaded
 		else
@@ -1772,7 +1793,7 @@ local GPS do
 	-- asking to land early ends the flight at the next taxi node, which can be on a map before the one of the destination
 	if TaxiRequestEarlyLanding then
 		hooksecurefunc("TaxiRequestEarlyLanding", function()
-			if flight then
+			if flight and flight.wasOnTaxi then
 				flight.earlyLanding = true
 				Recorder:RequestStop()
 				Visualization:RequestStop()
@@ -1780,20 +1801,22 @@ local GPS do
 		end)
 	end
 
-	---@param state State
+	-- A flight was requested and we're waiting to get on the taxi.
+	---@param areaID? number The taxi map.
 	---@param info TaxiTimerLib-1.0_FlightInfo
-	function GPS:Start(state, info)
-		-- any previous flight is stopped before the stopwatch is started for this flight
+	function GPS:Request(areaID, info)
 		if flight then
-			Timer:Stop()
-			flight.ticker:Cancel()
+			if flight.wasOnTaxi then
+				if UnitOnTaxi("player") then
+					return
+				end
+				flight:Land()
+			else
+				flight:Discard()
+			end
 		end
-		Visualization:Start(info)
-		Recorder:Start(state, info)
-		if info.donotadjustarrivaltime then
-			Timer:Start(info.duration, true)
-		end
-		flight = Flight.New(state, info)
+		Recorder:Start(areaID, info)
+		flight = Flight.New(areaID, info)
 	end
 
 end
@@ -1810,16 +1833,22 @@ local State do
 	-- we utilize the library to keep track of the taxi map state (we just have to hook it up and call the API that updates the state)
 	State = setmetatable({}, { __index = function(_, key) return lib.GameAPI.TaxiMap[key] end }) ---@type State
 
+	-- The taxi node the player points at or takes, nothing if the flight path is not reachable.
+	---@param node? TaxiNodeInfo
+	function State:Select(node)
+		self.to = node
+		if node and node.state == Enum.FlightPathState.Unreachable then
+			self.to = nil
+		end
+	end
+
 	---@param button TaxiButton
 	function State:UpdateButton(button)
 		self:Update()
 		if button.taxiNodeData then
-			self.to = self.nodes[button.taxiNodeData.slotIndex] or button.taxiNodeData
+			self:Select(self.nodes[button.taxiNodeData.slotIndex] or button.taxiNodeData)
 		else
-			self.to = self.nodes[button:GetID()]
-		end
-		if self.to and self.to.state == Enum.FlightPathState.Unreachable then
-			self.to = nil
+			self:Select(self.nodes[button:GetID()])
 		end
 	end
 
@@ -1878,14 +1907,6 @@ local State do
 		end
 		GameTooltip:AddLine(format("~ %s flight time", lib.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
 		GameTooltip:Show()
-	end
-
-	function State:PlotCourse()
-		local info = self:GetFlightInfo()
-		if not info then
-			return
-		end
-		GPS:Start(self, info)
 	end
 
 	---@return TaxiTimerLib-1.0_FlightInfo?
@@ -1958,11 +1979,21 @@ local State do
 		self:ButtonTooltip()
 	end
 
-	---@param button TaxiButton
-	function State:OnClick(button)
-		self:UpdateButton(button)
-		self:PlotCourse()
+	-- The player took a taxi node.
+	---@param slotIndex number
+	function State:OnTakeTaxiNode(slotIndex)
+		self:Update()
+		self:Select(self.nodes[slotIndex])
+		local info = self:GetFlightInfo()
+		if info then
+			GPS:Request(self.areaID, info)
+		end
 	end
+
+	-- We track flight requests through the API.
+	hooksecurefunc("TakeTaxiNode", function(slotIndex)
+		State:OnTakeTaxiNode(slotIndex)
+	end)
 
 end
 
@@ -1980,7 +2011,6 @@ local Frames do
 		OnLoad = function(_, frame)
 			frame:HookScript("OnShow", function() State:Update(true) end)
 			hooksecurefunc(FlightMap_FlightPointPinMixin, "OnMouseEnter", function(...) State:OnEnter(...) end)
-			hooksecurefunc(FlightMap_FlightPointPinMixin, "OnClick", function(...) State:OnClick(...) end)
 		end,
 	}
 
@@ -1994,7 +2024,6 @@ local Frames do
 				if button and not manifest[button] then
 					manifest[button] = true
 					button:HookScript("OnEnter", function(...) State:OnEnter(...) end)
-					button:HookScript("OnClick", function(...) State:OnClick(...) end)
 				end
 			end
 		end,
