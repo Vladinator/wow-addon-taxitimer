@@ -1,7 +1,7 @@
 -- The recorded flights to analyze: the ones of the saved variables, kept in the archive, and what the archive already has.
 
 ---@param ctx AnalysisContext
----@return fun(opts: AnalysisOptions): FlightRecord[], string
+---@return fun(opts: AnalysisOptions): FlightRecord[], string, GossipFlightRecord[]
 return function(ctx)
 	local shim = ctx.shim
 	local util = ctx.util
@@ -47,6 +47,8 @@ return function(ctx)
 		local files, labels = findFiles(opts)
 		local archivePath = opts.archivePath
 		local records = {} ---@type FlightRecord[]
+		local gossipRecords = {} ---@type GossipFlightRecord[] What happened when a gossip option put the player on a flight.
+		local gossipArchivePath = archivePath and archivePath:gsub("%.lua$", "") .. "_gossip.lua"
 		local numAdded, numLoose = 0, 0
 		for _, path in ipairs(files) do
 			local globals, err = shim.savedvariables(path)
@@ -56,8 +58,16 @@ return function(ctx)
 					os.exit(1)
 				end
 			else
-				local db = globals.TaxiTimerDB ---@type { flights?: FlightRecord[] }?
+				local db = globals.TaxiTimerDB ---@type { flights?: FlightRecord[], gossipFlights?: GossipFlightRecord[] }?
 				local flights = type(db) == "table" and type(db.flights) == "table" and db.flights or {}
+				local gossip = type(db) == "table" and type(db.gossipFlights) == "table" and db.gossipFlights or {}
+				if gossipArchivePath then
+					gossipRecords = archive.mergeGossip(gossipArchivePath, gossip)
+				else
+					for _, entry in ipairs(gossip) do
+						gossipRecords[#gossipRecords + 1] = entry
+					end
+				end
 				if archivePath then
 					-- the flights are kept in a file of the repo, so they are still there when the saved variables are emptied
 					local added, loose
@@ -76,15 +86,16 @@ return function(ctx)
 		if archivePath then
 			if #files == 0 then
 				records = archive.merge(archivePath, {})
+				gossipRecords = archive.mergeGossip(gossipArchivePath --[[@as string]], {})
 			else
 				printf("%d new flight%s added to %s, which has %d now%s\n", numAdded, numAdded == 1 and "" or "s", archivePath, #records - numLoose, numLoose > 0 and format(" (%d flights do not say when they were flown and are not kept)", numLoose) or "")
 				source = source .. " and " .. archivePath
 			end
 		end
-		if #records == 0 then
+		if #records == 0 and #gossipRecords == 0 then
 			warn("no flights in %s, turn recording on with /taxitimer record in the game and fly somewhere", source)
 			os.exit(1)
 		end
-		return records, source
+		return records, source, gossipRecords
 	end
 end

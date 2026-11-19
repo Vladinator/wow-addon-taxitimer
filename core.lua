@@ -16,6 +16,18 @@ local function print(text, ...)
 	DEFAULT_CHAT_FRAME:AddMessage(format(text, ...), 1, 1, 0)
 end
 
+-- Rounds a number to the amount of decimals.
+---@param value? number
+---@param decimals number
+---@return number
+local function Round(value, decimals)
+	if not value then
+		return 0
+	end
+	local mult = 10 ^ decimals
+	return floor(value * mult + 0.5) / mult
+end
+
 -- Get the name of a taxi node.
 ---@param node TaxiTimerLib-1.0_FlightCheckpoint|TaxiTimerLib-1.0_TaxiRouteNode|TaxiNodeInfo
 ---@return string
@@ -41,9 +53,12 @@ local SV do
 
 	---@alias TaxiTimerDBFlights FlightRecord[]
 
+	---@alias TaxiTimerDBGossipFlights GossipFlightRecord[]
+
 	---@class TaxiTimerDB
 	---@field public options TaxiTimerDBOptions
 	---@field public flights TaxiTimerDBFlights
+	---@field public gossipFlights TaxiTimerDBGossipFlights
 
 	SV = {}
 
@@ -63,6 +78,7 @@ local SV do
 			checkpoints = false,
 		},
 		flights = {},
+		gossipFlights = {},
 	}
 
 	---@generic T extends table
@@ -122,6 +138,16 @@ local SV do
 	function SV:AddFlight(flight)
 		local flights = self:Get("flights")
 		flights[#flights + 1] = flight
+	end
+
+	---@param entry GossipFlightRecord
+	---@param maxEntries number
+	function SV:AddGossipFlight(entry, maxEntries)
+		local entries = self:Get("gossipFlights")
+		entries[#entries + 1] = entry
+		while #entries > maxEntries do
+			table.remove(entries, 1)
+		end
 	end
 
 	---@param maxFlights number
@@ -1602,17 +1628,6 @@ local Recorder do
 
 	Recorder = {}
 
-	---@param value? number
-	---@param decimals number
-	---@return number
-	local function Round(value, decimals)
-		if not value then
-			return 0
-		end
-		local mult = 10 ^ decimals
-		return floor(value * mult + 0.5) / mult
-	end
-
 	---@param points TaxiTimerLib-1.0_TaxiPathNode[]
 	---@param first number
 	---@param last number
@@ -1803,6 +1818,158 @@ local Recorder do
 
 end
 
+-- While recording, an option that we do not know a flight for may still put the player on a taxi. We can not tell which option it was,
+-- but we know the choices of the window and the ones made, so when the player is on a taxi soon after, it is written down for later review.
+---@class GossipDiscovery
+local GossipDiscovery do
+
+	---@class GossipPlace
+	---@field public x? number
+	---@field public y? number
+	---@field public z? number
+	---@field public map? number
+	---@field public uiMap? number
+
+	---@class GossipOptionRecord
+	---@field public id? number
+	---@field public index? number
+	---@field public name? string
+	---@field public flags? number
+	---@field public spellID? number
+
+	---@class GossipChoiceRecord
+	---@field public id? number
+	---@field public index? number
+	---@field public name? string
+	---@field public ago number
+
+	---@class GossipFlightRecord
+	---@field public addon string Version of the addon.
+	---@field public project number Game client (`WOW_PROJECT_ID`).
+	---@field public build number Game build number.
+	---@field public time number Server time when we saw the player on the flight.
+	---@field public faction? string Faction of the player.
+	---@field public npcType? "creature"|"object" What the player talked to.
+	---@field public npcID? number
+	---@field public npcName? string
+	---@field public options GossipOptionRecord[] The options of the window the choice was made in.
+	---@field public choices GossipChoiceRecord[] The options chosen in the last minute, the last one is the most likely to be the one that put the player on the flight.
+	---@field public takeoffDelay number Seconds from the last choice to when we saw the player on the flight.
+	---@field public start GossipPlace Where the player was when we saw them on the flight.
+	---@field public duration? number Seconds the player was on the flight. Only missing on the first versions, which kept it before it ended.
+	---@field public landing? GossipPlace Where the player was when we saw the flight end.
+
+	---@class GossipNPC
+	---@field public type? "creature"|"object"
+	---@field public id? number
+	---@field public name? string
+
+	---@class GossipDiscoveryChoice : GossipOptionRecord
+	---@field public at number `GetTime()` when it was chosen.
+
+	---What is known when an option is chosen, before we know if it puts the player on a flight.
+	---@class GossipFlightDraft
+	---@field public npc GossipNPC Who the player talked to.
+	---@field public options GossipOptionRecord[] The options of the window.
+	---@field public choices GossipDiscoveryChoice[] The options chosen in the last minute, the last one is the one that was just chosen.
+
+	local DISCOVERY_MAX_ENTRIES = 100 -- the oldest are dropped once we have more than this
+	local DISCOVERY_TRAIL_SIZE = 5 -- the last choices that are kept
+	local DISCOVERY_TRAIL_SECONDS = 60 -- how long a choice is kept
+
+	local trail = {} ---@type GossipDiscoveryChoice[]
+
+	GossipDiscovery = {}
+
+	local function GetPlayerPlace()
+		local x, y, z, map = UnitPosition("player")
+		---@type GossipPlace
+		return { x = x, y = y, z = z, map = map, uiMap = C_Map.GetBestMapForUnit("player") }
+	end
+
+	---@param option GossipOptionUIInfo
+	local function DescribeOption(option)
+		local id, index, name = option.gossipOptionID, option.orderIndex, option.name
+		---@type GossipOptionRecord
+		return {
+			id = not issecretvalue(id) and id or nil,
+			index = not issecretvalue(index) and index or nil,
+			name = not issecretvalue(name) and name or nil,
+			flags = not issecretvalue(option.flags) and option.flags or nil,
+			spellID = not issecretvalue(option.spellID) and option.spellID or nil,
+		}
+	end
+
+	-- Remember the choice of an option, and what is known of it.
+	---@param option GossipOptionUIInfo The option that was chosen.
+	---@param npc GossipNPC Who the player talked to.
+	---@param options GossipOptionUIInfo[] The options of the window.
+	function GossipDiscovery:Choose(option, npc, options)
+		local now = GetTime()
+		local choice = DescribeOption(option) --[[@as GossipDiscoveryChoice]]
+		choice.at = now
+		for i = #trail, 1, -1 do
+			if now - trail[i].at > DISCOVERY_TRAIL_SECONDS then
+				table.remove(trail, i)
+			end
+		end
+		trail[#trail + 1] = choice
+		while #trail > DISCOVERY_TRAIL_SIZE do
+			table.remove(trail, 1)
+		end
+		local described = {} ---@type GossipOptionRecord[]
+		for i, windowOption in ipairs(options) do
+			described[i] = DescribeOption(windowOption)
+		end
+		---@type GossipFlightDraft
+		return { npc = npc, options = described, choices = { unpack(trail) } }
+	end
+
+	-- The player is on the taxi that the choice led to, so it is the start of the record.
+	---@param draft GossipFlightDraft
+	---@param now number
+	function GossipDiscovery:Board(draft, now)
+		local choices = {} ---@type GossipChoiceRecord[]
+		for i, choice in ipairs(draft.choices) do
+			choices[i] = { id = choice.id, index = choice.index, name = choice.name, ago = Round(now - choice.at, 2) }
+		end
+		local last = draft.choices[#draft.choices]
+		local npc = draft.npc
+		---@type GossipFlightRecord
+		local record = {
+			addon = C_AddOns.GetAddOnMetadata(addonName, "Version") or "",
+			project = WOW_PROJECT_ID,
+			build = tonumber((select(2, GetBuildInfo()))) or 0,
+			time = GetServerTime(),
+			faction = UnitFactionGroup("player"),
+			npcType = npc.type,
+			npcID = npc.id,
+			npcName = npc.name,
+			options = draft.options,
+			choices = choices,
+			takeoffDelay = last and Round(now - last.at, 2) or 0,
+			start = GetPlayerPlace(),
+		}
+		if SV:GetOption("debug") then
+			print("%s: a gossip option put you on a flight (%s #%s).", addonName, tostring(record.npcName or "?"), tostring(record.npcID or 0))
+		end
+		return record
+	end
+
+	-- The flight has ended, so the record is kept.
+	---@param record GossipFlightRecord
+	---@param seconds number How long the player was on the flight.
+	function GossipDiscovery:Land(record, seconds)
+		record.duration = Round(seconds, 2)
+		record.landing = GetPlayerPlace()
+		SV:AddGossipFlight(record, DISCOVERY_MAX_ENTRIES)
+		if SV:GetOption("debug") then
+			print("%s: the gossip flight was recorded: %.1f seconds (%s #%s).", addonName, record.duration, tostring(record.npcName or "?"), tostring(record.npcID or 0))
+		end
+	end
+
+end
+
 ---@class GPS
 local GPS do
 
@@ -1811,6 +1978,8 @@ local GPS do
 	local TAXI_MAX_MAP_CHANGE = 30 -- seconds we wait for a flight to carry on after it left the taxi on its way to another map (the game takes us off the taxi while the next map loads)
 	local TAXI_MAX_MAP_CHANGE_DISTANCE = 100 -- yards we must be away from the destination for the flight to be on its way to another map and not have ended
 	local TAXI_WARMUP = 30 -- seconds a flight that was asked for can wait for us to get on the taxi before we let it go (the game refuses it if we are in combat, too far away or already flying, or lagging, or other conditions which don't say so)
+	local DISCOVERY_WARMUP = 10 -- the same for a gossip option that we do not know a flight for, most of them are not
+	local DISCOVERY_LANDING = 5 -- seconds we are off the taxi before a flight that we do not know the destination of is over (we can not tell if it is changing map)
 
 	local TAXI_TIME_CORRECT = true -- if we wish to change the stopwatch time based on our movement and dynamic speed (if false, uses the original calculation and keeps the timer as-is during the flight)
 	local TAXI_TIME_CORRECT_INTERVAL = 2 -- adjusts the timer X amount of times during flight to better calculate actual arrival time (some taxi paths slow down at start, or speed up eventually, this causes some seconds differences, this aims to counter that a bit)
@@ -1825,27 +1994,79 @@ local GPS do
 	---@field public chunk number The distance between the corrections.
 	---@field public adjustments number The seconds the timer was changed by in all.
 
-	-- The flight that was asked for, followed on every tick of the GPS. It is warming up until we are on the taxi, then it is going on.
-	---@class GPSFlight
+	-- The classes of the flights that are followed, `Flight` or `Discovery`.
+	---@alias GPSKind GPSFlight|GPSDiscovery
+
+	-- A flight that is followed on every tick of the GPS. It is warming up until we are on the taxi, then it is going on until we are off it.
+	-- What is the same for the flights we know the route of and the ones we do not is decided here, and what is not is done by the flight.
+	---@class GPSTracker
+	---@field public ticker FunctionContainer
+	---@field public wasOnTaxi boolean If we got on the taxi, which is when the flight is going on.
+	---@field public waitingOnTaxi number `GetTime()` when the flight was asked for.
+	---@field public warmup number Seconds the flight can wait for us to get on the taxi before we let it go.
+	---@field public lastOnTaxi? number `GetTime()` when we were last seen on the flight.
+	---@field public Fly fun(self: GPSTracker) We are on the taxi.
+	---@field public Land fun(self: GPSTracker) The flight has ended.
+	---@field public Discard fun(self: GPSTracker) The flight did not begin.
+	---@field public IsChangingMap fun(self: GPSTracker): boolean If we are off the taxi because the flight is on its way to another map, and not because it ended.
+	---@field public YieldsTo fun(self: GPSTracker, kind: GPSKind): boolean If the flight is let go while it waits for the taxi when a flight of the kind is asked for.
+	local Tracker = {}
+	Tracker.__index = Tracker
+
+	-- The flight is followed from a timer.
+	function Tracker:Start()
+		self.ticker = C_Timer.NewTicker(0.5, function()
+			self:Tick()
+		end)
+	end
+
+	-- We wait for the taxi.
+	function Tracker:Wait() end
+
+	-- We are off the taxi on the way to another map.
+	function Tracker:Pause() end
+
+	-- We asked to land early.
+	function Tracker:RequestEarlyLanding() end
+
+	-- A flight is let go for a flight of any kind, unless it says otherwise.
+	function Tracker:YieldsTo()
+		return true
+	end
+
+	-- Ticks are called from a timer to regularly update our state.
+	function Tracker:Tick()
+		if UnitOnTaxi("player") then
+			self:Fly()
+		elseif not self.wasOnTaxi then
+			self:Wait()
+			if GetTime() - self.waitingOnTaxi > self.warmup then
+				self:Discard()
+			end
+		elseif self:IsChangingMap() then
+			self:Pause() -- the flight carries on once the next map has loaded
+		else
+			self:Land()
+		end
+	end
+
+	-- The flight that was asked for. It shows while it goes on, and it is recorded.
+	---@class GPSFlight : GPSTracker
 	---@field public areaID? number The taxi map.
 	---@field public info TaxiTimerLib-1.0_FlightInfo
-	---@field public ticker FunctionContainer
 	---@field public travelScale number What we travel is seen from above, so it is scaled to match the flight distance that includes climbing and descending.
-	---@field public wasOnTaxi boolean If we got on the taxi, which is when the flight is going on and it shows.
-	---@field public waitingOnTaxi number `GetTime()` when the flight was asked for.
 	---@field public distance number The yards left of the flight.
 	---@field public timeCorrection? GPSTimeCorrection
 	---@field public stopwatchSet boolean If the timer was started at least once.
-	---@field public lastOnTaxi? number `GetTime()` when we were last seen on the flight.
 	---@field public lastTick? number `GetTime()` of the last tick we were on the flight.
 	---@field public lastX? number Where we were on the last tick, nothing if it does not compare to where we are (going from one map to another).
 	---@field public lastY? number
 	---@field public lastMapID? number The map we were on when last seen on the flight.
 	---@field public earlyLanding? boolean If we asked to land early at the next taxi node.
-	local Flight = {}
+	local Flight = setmetatable({}, { __index = Tracker })
 	Flight.__index = Flight
 
-	local flight ---@type GPSFlight? The flight that is going on.
+	local flight ---@type GPSTracker? The flight that is going on.
 
 	GPS = {}
 
@@ -1873,6 +2094,7 @@ local GPS do
 			travelScale = info.distance2D > 0 and info.distance / info.distance2D or 1,
 			wasOnTaxi = false,
 			waitingOnTaxi = GetTime(),
+			warmup = TAXI_WARMUP,
 			distance = info.distance,
 			stopwatchSet = false,
 		}, Flight)
@@ -1884,9 +2106,7 @@ local GPS do
 				adjustments = 0,
 			}
 		end
-		self.ticker = C_Timer.NewTicker(0.5, function()
-			self:Tick()
-		end)
+		self:Start()
 		return self
 	end
 
@@ -2033,49 +2253,127 @@ local GPS do
 		flight = nil
 	end
 
-	-- Ticks are called from a timer to regularly update our state.
-	function Flight:Tick()
-		if UnitOnTaxi("player") then
-			self:Fly()
-		elseif not self.wasOnTaxi then
-			Recorder:Idle()
-			if GetTime() - self.waitingOnTaxi > TAXI_WARMUP then
-				self:Discard()
-			end
-		elseif self:IsChangingMap() then
-			self.lastX = nil -- the flight carries on once the next map has loaded
-		else
-			self:Land()
-		end
+	function Flight:Wait()
+		Recorder:Idle()
+	end
+
+	function Flight:Pause()
+		self.lastX = nil
+	end
+
+	-- a flight we know the route of is only let go for another one, and not for a gossip option that may not put us on a flight at all
+	function Flight:YieldsTo(kind)
+		return kind == Flight
 	end
 
 	-- asking to land early ends the flight at the next taxi node, which can be on a map before the one of the destination
+	function Flight:RequestEarlyLanding()
+		self.earlyLanding = true
+		Recorder:RequestStop()
+		Visualization:RequestStop()
+	end
+
 	if TaxiRequestEarlyLanding then
 		hooksecurefunc("TaxiRequestEarlyLanding", function()
 			if flight and flight.wasOnTaxi then
-				flight.earlyLanding = true
-				Recorder:RequestStop()
-				Visualization:RequestStop()
+				flight:RequestEarlyLanding()
 			end
 		end)
+	end
+
+	-- A flight that a gossip option put us on, which we do not know the route of. It does not show, and what we see of it is written down when it ends.
+	---@class GPSDiscovery : GPSTracker
+	---@field public draft GossipFlightDraft
+	---@field public record? GossipFlightRecord Made once we are on the taxi.
+	---@field public boardedAt? number `GetTime()` when we were first seen on the flight.
+	local Discovery = setmetatable({}, { __index = Tracker })
+	Discovery.__index = Discovery
+
+	---@param draft GossipFlightDraft
+	---@return GPSDiscovery
+	function Discovery.New(draft)
+		local self = setmetatable({
+			draft = draft,
+			wasOnTaxi = false,
+			waitingOnTaxi = GetTime(),
+			warmup = DISCOVERY_WARMUP,
+		}, Discovery)
+		---@cast self GPSDiscovery
+		self:Start()
+		return self
+	end
+
+	function Discovery:Fly()
+		local now = GetTime()
+		if not self.wasOnTaxi then
+			self.wasOnTaxi = true
+			self.boardedAt = now
+			self.record = GossipDiscovery:Board(self.draft, now)
+		end
+		self.lastOnTaxi = now
+	end
+
+	-- we do not know where the flight goes, so we can only wait a while to see if we are back on the taxi
+	function Discovery:IsChangingMap()
+		return GetTime() - (self.lastOnTaxi or 0) < DISCOVERY_LANDING
+	end
+
+	function Discovery:Land()
+		self.ticker:Cancel()
+		flight = nil
+		local record, boardedAt, lastOnTaxi = self.record, self.boardedAt, self.lastOnTaxi
+		if record and boardedAt and lastOnTaxi then
+			GossipDiscovery:Land(record, lastOnTaxi - boardedAt)
+		end
+	end
+
+	function Discovery:Discard()
+		self.ticker:Cancel()
+		flight = nil
+	end
+
+	-- Takes the place of the flight that is there for a new flight, if it allows it. The only one that does not is a flight that is going on, the ones that are waiting for the taxi are let go (if they yield to it) and one that ended is landed.
+	---@param kind GPSKind The class of the new flight.
+	---@return boolean replaced If the new flight can begin.
+	local function Replace(kind)
+		if flight then
+			if flight.wasOnTaxi then
+				if UnitOnTaxi("player") then
+					return false
+				end
+				flight:Land()
+			elseif flight:YieldsTo(kind) then
+				flight:Discard()
+			else
+				return false
+			end
+		end
+		return true
 	end
 
 	-- A flight was requested and we're waiting to get on the taxi.
 	---@param areaID? number The taxi map.
 	---@param info TaxiTimerLib-1.0_FlightInfo
 	function GPS:Request(areaID, info)
-		if flight then
-			if flight.wasOnTaxi then
-				if UnitOnTaxi("player") then
-					return
-				end
-				flight:Land()
-			else
-				flight:Discard()
-			end
+		if not Replace(Flight) then
+			return
 		end
 		Recorder:Start(areaID, info)
 		flight = Flight.New(areaID, info)
+	end
+
+	-- An option was chosen that we do not know a flight for, and if it puts us on one it is written down.
+	---@param option GossipOptionUIInfo The option that was chosen.
+	---@param npc GossipNPC Who the player talked to.
+	---@param options GossipOptionUIInfo[] The options of the window.
+	function GPS:Discover(option, npc, options)
+		if not SV:GetOption("record") then
+			return
+		end
+		local draft = GossipDiscovery:Choose(option, npc, options)
+		if Replace(Discovery) then
+			flight = Discovery.New(draft)
+		end
 	end
 
 end
@@ -2586,11 +2884,15 @@ local GossipFlight do
 	-- Manual database over gossip options and what flight they represent.
 	--
 	-- The `gossipOptionID` is mapped to an `{ fromAreaId, fromId, toAreaId, toId }` entry.
-	---@type table<number, { [1]: number, [2]: number, [3]: number, [4]: number }?>
-	local GossipToFlight = {
-		[33160] = { 1209, 63, 1209, 22 }, -- Nighthaven, Moonglade > Thunder Bluff, Mulgore
-		[33161] = { 1209, 62, 1209, 27 }, -- Nighthaven, Moonglade > Rut'theran Village, Teldrassil
+	---@type table<TaxiTimerLib-1.0_GameFlavor, table<number, { [1]: number, [2]: number, [3]: number, [4]: number }?>?>
+	local GossipToFlightDB = {
+		[TTL.FLAVOR.mainline] = {
+			[33157] = { 1209, 62, 1209, 27 }, -- Nighthaven, Moonglade > Rut'theran Village, Teldrassil
+			[33160] = { 1209, 63, 1209, 22 }, -- Nighthaven, Moonglade > Thunder Bluff, Mulgore
+		},
 	}
+
+	local GossipToFlight = GossipToFlightDB[TTL.Sim.FLAVOR] or {}
 
 	local function SanitizeGossipMap()
 		local invalid = {} ---@type number[]
@@ -2626,21 +2928,6 @@ local GossipFlight do
 		return fromAreaId, TTL.GameAPI.GetFlightInfoFromNodeIDs({ fromId, toId }, fromAreaId, toAreaId)
 	end
 
-	---@param npcType? "creature"|"object"
-	---@param npcID? number
-	---@param option GossipOptionUIInfo
-	---@param text? string
-	---@param confirmed? boolean
-	local function CheckSelectedOption(npcType, npcID, option, text, confirmed)
-		if confirmed == false then
-			return
-		end
-		local fromAreaId, info = GetGossipFlightInfo(option.gossipOptionID)
-		if info then
-			GPS:Request(fromAreaId, info)
-		end
-	end
-
 	---@param guid? secret<string>
 	---@return "creature"|"object"?, number?
 	local function GetNPCInfoFromGUID(guid)
@@ -2656,10 +2943,12 @@ local GossipFlight do
 	end
 
 	local gossipNPCGUID ---@type secret<string>?
+	local gossipNPCName ---@type secret<string>?
 	local gossipOptions ---@type secret<GossipOptionUIInfo[]>?
 
 	local function RefreshGossipState()
 		gossipNPCGUID = UnitGUID("npc")
+		gossipNPCName = UnitName("npc")
 		gossipOptions = C_GossipInfo.GetOptions()
 	end
 
@@ -2679,6 +2968,24 @@ local GossipFlight do
 				end
 				return
 			end
+		end
+	end
+
+	---@param npcType? "creature"|"object"
+	---@param npcID? number
+	---@param option GossipOptionUIInfo
+	---@param text? string
+	---@param confirmed? boolean
+	local function CheckSelectedOption(npcType, npcID, option, text, confirmed)
+		if confirmed == false then
+			return
+		end
+		local fromAreaId, info = GetGossipFlightInfo(option.gossipOptionID)
+		if info then
+			GPS:Request(fromAreaId, info)
+		else
+			local npc = { type = npcType, id = npcID, name = not issecretvalue(gossipNPCName) and gossipNPCName or nil } ---@type GossipNPC
+			GPS:Discover(option, npc, gossipOptions and not issecretvalue(gossipOptions) and gossipOptions or {})
 		end
 	end
 

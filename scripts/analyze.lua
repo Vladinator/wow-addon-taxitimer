@@ -11,6 +11,7 @@ The speeds of a taxi map come first (its speed, how it takes off and lands, and 
 With `--apply` the changes are written to the sim file and the flights are analyzed again until nothing is left, so recording flights and running this is all it takes to keep the sim files up to date.
 Before that it lists the flights the simulation is still off by with the sim file as it is now, and what makes each of them differ (the distance and how the taxi nodes were flown past, the speed of a path, loading).
 Then how the game flies past taxi nodes where the simulation does it another way (`NODE_JOINS` and `RETRACE_EXCEPTIONS`), going by where the flights went.
+The gossip options that put the player on a flight we have nothing for (`gossipFlights` of the saved variables, kept in `data/recordings_gossip.lua`) are listed last, with the flights between the taxi nodes near where they started and ended that take as long as they did, and the line to add to `GossipToFlight` when it is clear which one it was.
 Some paths change the flight speed as they pass their points. These speeds are not part of the client files, so recorded flights are the only source for them.
 
 Runs in Lua 5.1 and later (use `lua`, `lua5.1`, `luajit` or the Lua of the Lua language server):
@@ -66,14 +67,15 @@ local leaveOutSuperseded = dofile(scriptDir .. "/src/analysis/superseded.lua")(c
 local printSummary = dofile(scriptDir .. "/src/analysis/summary.lua")(ctx)
 local printSpeeds = dofile(scriptDir .. "/src/analysis/speeds.lua")(ctx)
 local printCoverage = dofile(scriptDir .. "/src/analysis/coverage.lua")(ctx)
+local printGossip = dofile(scriptDir .. "/src/analysis/gossip.lua")(ctx)
 
 local printf, warn = ctx.util.printf, ctx.util.warn
 
 local opts = parseOptions(arg or {}, scriptPath)
-local records, source = loadRecords(opts)
+local records, source, gossipRecords = loadRecords(opts)
 
 -- the game to compare a flight to, newer records say which game they are from, named like its db file
----@param record FlightRecord
+---@param record { flavor?: TaxiTimerLib-1.0_GameFlavor, project?: number }
 ---@return TaxiTimerLib-1.0_GameFlavor
 local function getClient(record)
 	if type(record.flavor) == "string" then
@@ -182,6 +184,8 @@ if opts.coverage then
 	printCoverage(analyses)
 	shown = shown + 1
 end
+
+printGossip(gossipRecords, loadData, getClient)
 
 if shown == 0 then
 	print("\nuse --flight=N or --all to see the details of flights, --speeds for the speed of each path, --joins for how the taxi nodes were flown past, --coverage for where to fly next")

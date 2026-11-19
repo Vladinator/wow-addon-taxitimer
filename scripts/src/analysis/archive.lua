@@ -3,6 +3,7 @@
 
 ---@class FlightArchive
 ---@field merge fun(path: string, records: FlightRecord[]): FlightRecord[], number, number Adds the flights that are new to the file at `path` and returns all of its flights from old to new, how many were added and how many could not be kept.
+---@field mergeGossip fun(path: string, records: GossipFlightRecord[]): GossipFlightRecord[], number, number The same for the gossip flights.
 
 ---@param ctx AnalysisContext
 ---@return FlightArchive
@@ -117,11 +118,22 @@ return function(ctx)
 		end
 	end
 
+	-- gossip flights have no route, they are told apart by when they happened and who the npc was
+	---@param record GossipFlightRecord
+	---@return string? key
+	local function gossipKey(record)
+		if type(record) ~= "table" or type(record.time) ~= "number" then
+			return nil
+		end
+		return format("%d %s %s %s", record.time, tostring(record.project or ""), tostring(record.npcID or ""), tostring(record.takeoffDelay or ""))
+	end
+
 	---@param path string
-	---@param records FlightRecord[]
+	---@param records (FlightRecord|GossipFlightRecord)[]
+	---@param collection "flights"|"gossipFlights"
 	---@return boolean written
-	local function save(path, records)
-		local out = { "-- Every flight that was recorded, from old to new. Written by scripts/analyze.lua, which adds the flights of the saved variables it is given that are not in here yet.\n\nTaxiTimerDB = {\n\t[\"flights\"] = " }
+	local function save(path, records, collection)
+		local out = { format("-- Every %s that was recorded, from old to new. Written by scripts/analyze.lua, which adds the ones of the saved variables it is given that are not in here yet.\n\nTaxiTimerDB = {\n\t[%q] = ", collection == "flights" and "flight" or "gossip flight", collection) }
 		write(out, records, "\t")
 		out[#out + 1] = ",\n}\n"
 		local file = io.open(path, "wb")
@@ -137,22 +149,25 @@ return function(ctx)
 	-- MARK: Merging
 	--
 
+	---@generic R : FlightRecord|GossipFlightRecord
 	---@param path string
-	---@param records FlightRecord[] The flights of the saved variables.
-	---@return FlightRecord[] all The flights of the file with the new ones, from old to new, and after them the ones that could not be kept.
+	---@param records R[] The flights of the saved variables.
+	---@param collection "flights"|"gossipFlights" The table of the saved variables they are in.
+	---@param keyOf fun(record: R): string?
+	---@return R[] all The flights of the file with the new ones, from old to new, and after them the ones that could not be kept.
 	---@return number added
 	---@return number loose The flights that are not kept as they do not say when they were flown.
-	local function merge(path, records)
-		local all, seen = {}, {} ---@type FlightRecord[], table<string, boolean>
+	local function mergeRecords(path, records, collection, keyOf)
+		local all, seen = {}, {} ---@type any[], table<string, boolean>
 		if shim.readfile(path) then
 			local globals, err = shim.savedvariables(path)
-			local db = globals and globals.TaxiTimerDB ---@type { flights?: FlightRecord[] }?
-			if type(db) ~= "table" or type(db.flights) ~= "table" then
+			local db = globals and globals.TaxiTimerDB ---@type table<string, any[]>?
+			if type(db) ~= "table" or type(db[collection]) ~= "table" then
 				util.warn("unable to read the flights of %s%s, it is left as it is", path, err and (": " .. tostring(err)) or "")
 				return records, 0, 0
 			end
-			for _, record in ipairs(db.flights) do
-				local key = flightKey(record)
+			for _, record in ipairs(db[collection]) do
+				local key = keyOf(record)
 				if key and not seen[key] then
 					seen[key] = true
 					all[#all + 1] = record
@@ -160,9 +175,9 @@ return function(ctx)
 			end
 		end
 
-		local added, loose = 0, {} ---@type number, FlightRecord[]
+		local added, loose = 0, {} ---@type number, any[]
 		for _, record in ipairs(records) do
-			local key = flightKey(record)
+			local key = keyOf(record)
 			if not key then
 				loose[#loose + 1] = record
 			elseif not seen[key] then
@@ -173,7 +188,7 @@ return function(ctx)
 		end
 
 		-- from old to new, the flights of the same second stay in the order they were in
-		local order = {} ---@type table<FlightRecord, number>
+		local order = {} ---@type table<table, number>
 		for i, record in ipairs(all) do
 			order[record] = i
 		end
@@ -184,7 +199,7 @@ return function(ctx)
 			return order[a] < order[b]
 		end)
 
-		if added > 0 and not save(path, all) then
+		if added > 0 and not save(path, all, collection) then
 			util.warn("unable to write %s", path)
 		end
 		for _, record in ipairs(loose) do
@@ -193,5 +208,12 @@ return function(ctx)
 		return all, added, #loose
 	end
 
-	return { merge = merge }
+	return {
+		merge = function(path, records)
+			return mergeRecords(path, records, "flights", flightKey)
+		end,
+		mergeGossip = function(path, records)
+			return mergeRecords(path, records, "gossipFlights", gossipKey)
+		end,
+	}
 end

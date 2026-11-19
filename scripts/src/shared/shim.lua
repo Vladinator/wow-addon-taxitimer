@@ -120,6 +120,44 @@ end
 ---@class ShimLibraryOptions
 ---@field sim? string The path of a sim file to use instead of the one of the game.
 
+---The environment the files of the library are loaded in. The lib is registered in `LibStub`, which is in `_G`, so `_G` is this table and each load has its own.
+---@return table<string, any>
+local function newEnvironment()
+	local env = setmetatable({}, { __index = _G }) ---@type table<string, any>
+	env._G = env
+	env.strmatch = string.match -- used by LibStub.lua, the game has it
+	return env
+end
+
+---The games the library is for, which it names itself in `FLAVOR`. They are in the same order every time.
+---@param root string The folder of the addon.
+---@return TaxiTimerLib-1.0_GameFlavor[]? flavors
+---@return string? error
+function shim.flavors(root)
+	local env = newEnvironment()
+	for _, name in ipairs({ "libs/LibStub/LibStub.lua", "libs/TaxiTimerLib/TaxiTimerLib.lua" }) do
+		local chunk, err = shim.loadfile(root .. "/" .. name, env)
+		if not chunk then
+			return nil, err
+		end
+		local ok, runErr = pcall(chunk, "TaxiTimer", {})
+		if not ok then
+			return nil, tostring(runErr)
+		end
+	end
+	local LibStub = env.LibStub ---@type { [string]: any, __call: function }?
+	local lib = LibStub and LibStub("TaxiTimerLib-1.0", true) ---@type TaxiTimerLib-1.0?
+	if not lib then
+		return nil, "the files of the library did not make TaxiTimerLib-1.0"
+	end
+	local flavors = {} ---@type TaxiTimerLib-1.0_GameFlavor[]
+	for _, flavor in pairs(lib.FLAVOR) do
+		flavors[#flavors + 1] = flavor
+	end
+	table.sort(flavors)
+	return flavors
+end
+
 ---Loads the library the way the game does for a game, and returns it (TaxiTimerLib-1.0) with the db and sim of the game.
 ---The files are the ones of the toc and xml file in the order they are loaded in, `LibStub`, the library, the db and the sim.
 ---@param root string The folder of the addon.
@@ -130,10 +168,7 @@ end
 function shim.library(root, flavor, options)
 	options = options or {}
 
-	-- the lib is registered in `LibStub`, which is in `_G`, so `_G` is this table and each load has its own
-	local env = setmetatable({}, { __index = _G }) ---@type table<string, any>
-	env._G = env
-	env.strmatch = string.match -- used by LibStub.lua, the game has it
+	local env = newEnvironment()
 
 	local files = {
 		"libs/LibStub/LibStub.lua",

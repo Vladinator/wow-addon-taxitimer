@@ -13,6 +13,13 @@ end
 
 ---@alias TaxiTimerLib-1.0_GameFlavor "mainline"|"forever"|"vanilla"|"classic"
 
+lib.FLAVOR = {
+	mainline = "mainline",
+	forever = "forever",
+	vanilla = "vanilla",
+	classic = "classic",
+}
+
 ---@class TaxiTimerLib-1.0_TaxiNodesStruct
 ---@field public ID 1
 ---@field public FLAGS 2 `TAXINODEFLAGS`

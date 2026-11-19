@@ -4,7 +4,7 @@ Generates the db file of each game from the csv files in the `data/csv_<game>` f
 
 	lua scripts/launcher.lua [options] [game ...]
 
-The games are mainline, forever, classic and vanilla, and are all of them if none are given.
+The games are the ones the library names (`FLAVOR` in `TaxiTimerLib.lua`: mainline, forever, classic and vanilla), and are all of them if none are given.
 
 Options:
 
@@ -53,7 +53,13 @@ for _, option in ipairs(arg or {}) do
 	end
 end
 if #clients == 0 then
-	clients = { "mainline", "forever", "classic", "vanilla" }
+	local shim = dofile(scriptDir .. "/src/shared/shim.lua") ---@type Shim
+	local flavors, err = shim.flavors(addonDir)
+	if not flavors then
+		io.stderr:write("could not read the games of the library: ", tostring(err), "\n")
+		os.exit(1)
+	end
+	clients = flavors
 end
 
 ---Makes sure a folder exists, lua can't make one so the system is asked.

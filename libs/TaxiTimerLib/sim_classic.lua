@@ -9,7 +9,7 @@ local sim = {} ---@class TaxiTimerLib-1.0_Sim
 -- Record flights and run `scripts/analyze.lua` to see what to add, change or remove here. It reads these tables, so they need to keep their names and layout.
 
 -- The game the `sim_` file that was loaded is for.
-sim.FLAVOR = "classic"
+sim.FLAVOR = lib.FLAVOR.classic
 
 -- If the stretch where the path arriving at a taxi node and the path leaving it run alongside each other is skipped when flying past the node (like Ironforge between Kharanos and Menethil Harbor).
 sim.SKIP_RETRACED = false
