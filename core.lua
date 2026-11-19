@@ -2,6 +2,15 @@ local addonName = ... ---@type string
 
 local TTL = LibStub("TaxiTimerLib-1.0") ---@type TaxiTimerLib-1.0
 
+local _issecretvalue = issecretvalue
+
+---@secret-guard value is-secret
+---@param value any
+---@return boolean
+local function issecretvalue(value)
+	return _issecretvalue and _issecretvalue(value) and true or false
+end
+
 ---@param text string
 local function print(text, ...)
 	DEFAULT_CHAT_FRAME:AddMessage(format(text, ...), 1, 1, 0)
@@ -138,6 +147,34 @@ local SV do
 		options[key] = value
 	end
 
+end
+
+-- Append the flight information to the visible GameTooltip.
+-- Displays additional information when debug is enabled.
+---@param info TaxiTimerLib-1.0_FlightInfo
+---@param addDestinationName? boolean
+local function AddFlightTooltipLines(info, addDestinationName)
+	if addDestinationName then
+		GameTooltip:AddLine(NodeName(info.nodes[#info.nodes]), 1, 1, 1, false)
+	end
+	if SV:GetOption("debug") then
+		GameTooltip:AddLine(" ")
+		for i = 1, #info.nodes do
+			local node = info.nodes[i]
+			GameTooltip:AddLine(format("%d. %s", i, NodeName(node)), 0.8, 0.8, 0.8, false)
+		end
+		GameTooltip:AddLine(" ")
+		GameTooltip:AddLine(format("Number of nodes: %d", #info.nodes), 0.8, 0.8, 0.8, false)
+		GameTooltip:AddLine(format("Number of points: %d", #info.points), 0.8, 0.8, 0.8, false)
+		GameTooltip:AddLine(format("Speed: ~ %.1f", info.speed), 0.8, 0.8, 0.8, false)
+		GameTooltip:AddLine(format("Distance: ~ %.1f yards", info.distance), 0.8, 0.8, 0.8, false)
+		if info.delay > 0 then
+			GameTooltip:AddLine(format("Stops: %d seconds %s", info.delay, info.delayIncluded and "" or "(not included)"), 0.8, 0.8, 0.8, false)
+		end
+		GameTooltip:AddLine(format("Recording: %s", SV:GetOption("record") and "Yes" or "No"), 0.8, 0.8, 0.8, false)
+		GameTooltip:AddLine(" ")
+	end
+	GameTooltip:AddLine(format("~ %s flight time", TTL.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
 end
 
 ---@class Visualization
@@ -2110,24 +2147,7 @@ local State do
 			end
 			return
 		end
-		if SV:GetOption("debug") then
-			GameTooltip:AddLine(" ")
-			for i = 1, #info.nodes do
-				local node = info.nodes[i]
-				GameTooltip:AddLine(format("%d. %s", i, node.name), 0.8, 0.8, 0.8, false)
-			end
-			GameTooltip:AddLine(" ")
-			GameTooltip:AddLine(format("Number of nodes: %d", #info.nodes), 0.8, 0.8, 0.8, false)
-			GameTooltip:AddLine(format("Number of points: %d", #info.points), 0.8, 0.8, 0.8, false)
-			GameTooltip:AddLine(format("Speed: ~ %.1f", info.speed), 0.8, 0.8, 0.8, false)
-			GameTooltip:AddLine(format("Distance: ~ %.1f yards", info.distance), 0.8, 0.8, 0.8, false)
-			if info.delay > 0 then
-				GameTooltip:AddLine(format("Stops: %d seconds %s", info.delay, info.delayIncluded and "" or "(not included)"), 0.8, 0.8, 0.8, false)
-			end
-			GameTooltip:AddLine(format("Recording: %s", SV:GetOption("record") and "Yes" or "No"), 0.8, 0.8, 0.8, false)
-			GameTooltip:AddLine(" ")
-		end
-		GameTooltip:AddLine(format("~ %s flight time", TTL.GameAPI.FormatDuration(info.duration, true)), 1, 1, 1, false)
+		AddFlightTooltipLines(info)
 		GameTooltip:Show()
 	end
 
@@ -2503,42 +2523,41 @@ end
 ---@class AddOnFrame : Frame
 local AddOn do
 
-	---@param self AddOnFrame
-	---@param event WowEvent
-	---@param ... any
-	local function OnEvent(self, event, ...)
+	AddOn = CreateFrame("Frame") ---@class AddOnFrame
+	AddOn:RegisterEvent("ADDON_LOADED")
 
-		if event == "ADDON_LOADED" and ... == addonName then
-			SV:Init()
-			SettingsUI:Init()
-		end
-
+	local function CheckFrames()
 		local numLoaded, numTotal = 0, 0
-
 		for name, manifest in pairs(Frames) do
 			local frame = _G[name] ---@type Frame?
-
 			if frame then
 				if not manifest.loaded then
 					manifest.loaded = true
 					manifest:OnLoad(frame)
 				end
-
 				numLoaded = numLoaded + 1
 			end
-
 			numTotal = numTotal + 1
 		end
-
-		if numLoaded == numTotal then
-			self:UnregisterEvent(event)
-		end
-
+		return numLoaded == numTotal
 	end
 
-	AddOn = CreateFrame("Frame") ---@class AddOnFrame
-	AddOn:SetScript("OnEvent", OnEvent)
-	AddOn:RegisterEvent("ADDON_LOADED")
+	---@param self AddOnFrame
+	---@param event WowEvent
+	---@param ... any
+	AddOn:HookScript("OnEvent", function(self, event, ...)
+		if event ~= "ADDON_LOADED" then
+			return
+		end
+		local name = ... ---@type string
+		if name == addonName then
+			SV:Init()
+			SettingsUI:Init()
+		end
+		if CheckFrames() then
+			self:UnregisterEvent(event)
+		end
+	end)
 
 	_G[format("SLASH_%s1", addonName)] = "/taxitimer"
 
@@ -2557,6 +2576,189 @@ local AddOn do
 		print("%s commands:", addonName)
 		print("    |cffFFFFFFdebug|r   (|cffFFFFFF%s|r) Enable destination tooltip information.", tostring(SV:GetOption("debug")))
 		print("    |cffFFFFFFrecord|r  (|cffFFFFFF%s|r) Records flights for later analysis.", tostring(SV:GetOption("record")))
+	end
+
+end
+
+---@class GossipFlight
+local GossipFlight do
+
+	-- Manual database over gossip options and what flight they represent.
+	--
+	-- The `gossipOptionID` is mapped to an `{ fromAreaId, fromId, toAreaId, toId }` entry.
+	---@type table<number, { [1]: number, [2]: number, [3]: number, [4]: number }?>
+	local GossipToFlight = {
+		[33160] = { 1209, 63, 1209, 22 }, -- Nighthaven, Moonglade > Thunder Bluff, Mulgore
+		[33161] = { 1209, 62, 1209, 27 }, -- Nighthaven, Moonglade > Rut'theran Village, Teldrassil
+	}
+
+	local function SanitizeGossipMap()
+		local invalid = {} ---@type number[]
+		for id, flight in pairs(GossipToFlight) do
+			local fromId, toId = flight[2], flight[4]
+			if not TTL.IsFlightPathValid(fromId, toId) then
+				invalid[#invalid + 1] = id
+			end
+		end
+		if #invalid == 0 then
+			return
+		end
+		for _, id in pairs(invalid) do
+			local flight = GossipToFlight[id]
+			GossipToFlight[id] = nil
+			if flight and SV:GetOption("debug") then
+				local fromId, toId = flight[2], flight[4]
+				print("%s has no path from taxi node %d to %d for gossip option %d.", addonName, fromId, toId, id)
+			end
+		end
+	end
+
+	-- The flight a gossip option puts the player on, if it is one, and the taxi map it starts from.
+	---@param gossipOptionID? nosecret<number>
+	---@return number? fromAreaId
+	---@return TaxiTimerLib-1.0_FlightInfo? info
+	local function GetGossipFlightInfo(gossipOptionID)
+		local flight = gossipOptionID and GossipToFlight[gossipOptionID]
+		if not flight then
+			return
+		end
+		local fromAreaId, fromId, toAreaId, toId = flight[1], flight[2], flight[3], flight[4]
+		return fromAreaId, TTL.GameAPI.GetFlightInfoFromNodeIDs({ fromId, toId }, fromAreaId, toAreaId)
+	end
+
+	---@param npcType? "creature"|"object"
+	---@param npcID? number
+	---@param option GossipOptionUIInfo
+	---@param text? string
+	---@param confirmed? boolean
+	local function CheckSelectedOption(npcType, npcID, option, text, confirmed)
+		if confirmed == false then
+			return
+		end
+		local fromAreaId, info = GetGossipFlightInfo(option.gossipOptionID)
+		if info then
+			GPS:Request(fromAreaId, info)
+		end
+	end
+
+	---@param guid? secret<string>
+	---@return "creature"|"object"?, number?
+	local function GetNPCInfoFromGUID(guid)
+		if issecretvalue(guid) or not guid then
+			return
+		end
+		local unitType, _, _, _, _, unitID = strsplit("-", guid)
+		if unitType == "Creature" or unitType == "Vehicle" or unitType == "Pet" then
+			return "creature", tonumber(unitID)
+		elseif unitType == "GameObject" then
+			return "object", tonumber(unitID)
+		end
+	end
+
+	local gossipNPCGUID ---@type secret<string>?
+	local gossipOptions ---@type secret<GossipOptionUIInfo[]>?
+
+	local function RefreshGossipState()
+		gossipNPCGUID = UnitGUID("npc")
+		gossipOptions = C_GossipInfo.GetOptions()
+	end
+
+	---@param isIndex boolean
+	---@param optionIndexOrID secret<number>
+	---@return GossipOptionUIInfo?
+	local function FindGossipOption(isIndex, optionIndexOrID)
+		if not gossipOptions or issecretvalue(gossipOptions) or issecretvalue(optionIndexOrID) then
+			return
+		end
+		local key = isIndex and "orderIndex" or "gossipOptionID" ---@type keyof GossipOptionUIInfo
+		for _, option in pairs(gossipOptions) do
+			local value = option[key] ---@type secret<any>
+			if not issecretvalue(value) and value == optionIndexOrID then
+				if not issecretvalue(option.gossipOptionID) then
+					return option
+				end
+				return
+			end
+		end
+	end
+
+	---@param isIndex boolean
+	---@param optionIndexOrID secret<number>
+	---@param text? string
+	---@param confirmed? boolean
+	local function ResolveSelectedOption(isIndex, optionIndexOrID, text, confirmed)
+		local option = FindGossipOption(isIndex, optionIndexOrID)
+		if option then
+			local npcType, npcID = GetNPCInfoFromGUID(gossipNPCGUID)
+			CheckSelectedOption(npcType, npcID, option, text, confirmed)
+		end
+	end
+
+	---@param optionID number
+	---@param text? string
+	---@param confirmed? boolean
+	hooksecurefunc(C_GossipInfo, "SelectOption", function(optionID, text, confirmed)
+		ResolveSelectedOption(false, optionID, text, confirmed)
+	end)
+
+	---@param orderIndex number
+	---@param text? string
+	---@param confirmed? boolean
+	hooksecurefunc(C_GossipInfo, "SelectOptionByIndex", function(orderIndex, text, confirmed)
+		ResolveSelectedOption(true, orderIndex, text, confirmed)
+	end)
+
+	AddOn:RegisterEvent("GOSSIP_SHOW")
+	AddOn:RegisterEvent("GOSSIP_OPTIONS_REFRESHED")
+
+	---@param self AddOnFrame
+	---@param event WowEvent
+	---@param ... any
+	AddOn:HookScript("OnEvent", function(self, event, ...)
+		if event == "GOSSIP_SHOW" then
+			SanitizeGossipMap()
+			RefreshGossipState()
+		elseif event == "GOSSIP_OPTIONS_REFRESHED" then
+			RefreshGossipState()
+		end
+	end)
+
+	--
+	-- MARK: GossipFrame
+	--
+
+	if GossipTitleButtonMixin then
+
+		---@param button GossipTitleButton
+		hooksecurefunc(GossipTitleButtonMixin, "OnEnter", function(button)
+			local data = button.GetElementData and button:GetElementData()
+			if not data or data.buttonType ~= GOSSIP_BUTTON_TYPE_OPTION then
+				return
+			end
+			local optionID = data.info.gossipOptionID
+			if issecretvalue(optionID) then
+				return
+			end
+			local _, info = GetGossipFlightInfo(optionID)
+			if not info then
+				return
+			end
+			if GameTooltip:GetOwner() ~= button or not GameTooltip:IsShown() then
+				GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+			else
+				GameTooltip:AddLine(" ")
+			end
+			AddFlightTooltipLines(info, true)
+			GameTooltip:Show()
+		end)
+
+		---@param button GossipTitleButton
+		hooksecurefunc(GossipTitleButtonMixin, "OnLeave", function(button)
+			if GameTooltip:GetOwner() == button then
+				GameTooltip:Hide()
+			end
+		end)
+
 	end
 
 end

@@ -76,8 +76,9 @@ function api.UpdateTaxiMap(forceUpdate)
 	return true
 end
 
--- A flight between two taxi maps (like Dragon Isles and Zaralek Cavern) has taxi nodes on both, and the game only lists the ones of the taxi map we are on.
--- The route has the slot of the ones that are missing, so the list of the taxi map that is shown is used for them, if its slots are the same as the ones of the taxi map we are on.
+-- A flight between two taxi maps has taxi nodes on both, and the game only lists the ones of the taxi map we are on.
+-- The route has the slot of the ones that are missing, so the list of the taxi map that is shown is used for them, if
+-- its slots are the same as the ones of the taxi map we are on.
 local function AddShownTaxiMap()
 	local frame = _G["FlightMapFrame"] ---@type { GetMapID?: fun(self: table): number? }?
 	local mapID = frame and frame.GetMapID and frame:GetMapID()
@@ -123,14 +124,15 @@ end
 -- MARK: Taxi speed
 --
 
--- Returns what the flight path mount is made to fly faster or slower by, going by the spells the player knows (the `SPEED_MODIFIERS` of the sim file of the game, like Frequent Flier in Classic Era's seasonal realms).
+-- Returns what the flight path mount is made to fly faster or slower by, going by the spells the player knows.
+-- The `SPEED_MODIFIERS` of the sim file of the game, like Frequent Flier in Classic Era's seasonal realms.
 ---@return number
 function api.GetSpeedModifier()
 	local modifiers = lib.Sim and lib.Sim.SPEED_MODIFIERS
 	local modifier = 1
 
 	if modifiers then
-		---@diagnostic disable-next-line: deprecated
+		---@diagnostic expect-next-line: deprecated
 		local IsSpellKnown = _G["IsSpellKnown"] or (C_SpellBook and C_SpellBook.IsSpellKnown) ---@type (fun(spell: number, ...: any): boolean)?
 
 		for i = 1, #modifiers do
@@ -184,7 +186,8 @@ function api.GetRouteNodes(to, from)
 		local sourceNode = sourceSlotIndex and (taxiNodes[sourceSlotIndex] or otherNodes[sourceSlotIndex])
 		local destinationNode = destinationSlotIndex and (taxiNodes[destinationSlotIndex] or otherNodes[destinationSlotIndex])
 
-		-- taxi nodes that are never shown on the taxi map (like the tunnels into Zaralek Cavern) are not in the list, so only the ones we have are used and the simulation finds the way between them
+		-- taxi nodes that are never shown on the taxi map (like the tunnels into Zaralek Cavern) are not in the list, so only
+		-- the ones we have are used and the simulation finds the way between them.
 		if sourceNode and not added[sourceNode] then
 			added[sourceNode] = true
 			nodes[#nodes + 1] = sourceNode
@@ -231,6 +234,39 @@ function api.GetFlightInfoToNode(to, from, areaID)
 	end
 	local faction = UnitFactionGroup("player")
 	return lib.GetFlightInfoFromNodes(nodes, areaID or TaxiMap.areaID, api.GetSpeedModifier(), shown, faction)
+end
+
+-- Finds a taxi node of a taxi map by its id.
+-- The game lists the taxi nodes of a taxi map without being at it, so this works anywhere.
+---@param areaID number The taxi map.
+---@param nodeID number
+---@return MapTaxiNodeInfo?
+function api.GetTaxiMapNodeByID(areaID, nodeID)
+	for _, node in ipairs(C_TaxiMap.GetTaxiNodesForMap(areaID) or {}) do
+		if node.nodeID == nodeID then
+			return node
+		end
+	end
+end
+
+-- Returns what a flight is estimated to be like going by the taxi nodes alone.
+-- This is used for flights that the game starts in other ways than through the taxi map system.
+-- The speed is the one of the taxi map the flight starts from, the taxi map it ends on is only where the name of the last taxi node is looked for.
+---@param nodeIDs number[] The taxi nodes of the route in the order they are flown, the first is where it starts.
+---@param fromAreaId? number The taxi map the flight starts from, whose speed is used.
+---@param toAreaId? number The taxi map the flight ends on, if it is not the same.
+---@return TaxiTimerLib-1.0_FlightInfo?
+function api.GetFlightInfoFromNodeIDs(nodeIDs, fromAreaId, toAreaId)
+	local nodes = {} ---@type TaxiTimerLib-1.0_TaxiRouteNode[]
+	for i = 1, #nodeIDs do
+		local node = fromAreaId and api.GetTaxiMapNodeByID(fromAreaId, nodeIDs[i])
+		if not node and toAreaId and toAreaId ~= fromAreaId then
+			node = api.GetTaxiMapNodeByID(toAreaId, nodeIDs[i])
+		end
+		nodes[i] = { nodeID = nodeIDs[i], name = node and node.name }
+	end
+	local faction = UnitFactionGroup("player")
+	return lib.GetFlightInfoFromNodes(nodes, fromAreaId, api.GetSpeedModifier(), nil, faction)
 end
 
 -- Returns what the flight to a slot of the taxi map is estimated to be like.
@@ -315,5 +351,5 @@ function api.GetFlightTime(info, dropZeroHours)
 	return api.FormatDuration(duration, dropZeroHours)
 end
 
----@diagnostic disable-next-line: deprecated
+---@diagnostic expect-next-line: deprecated
 lib.SetGameAPI(api, MINOR)

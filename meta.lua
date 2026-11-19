@@ -31,6 +31,24 @@ function Stopwatch_StartCountdown(hours, minutes, seconds) end
 ---@field OnMouseEnter fun(self: FlightMapFlightPointPinMixin)
 FlightMap_FlightPointPinMixin = {}
 
+---What the scroll box of the gossip frame has for a button: what kind it is (`GOSSIP_BUTTON_TYPE_OPTION` for an option) and, for an option, what the option is.
+---@class GossipElementData
+---@field buttonType number
+---@field info GossipOptionUIInfo
+
+---A button of the gossip frame, which the scroll box that made it can tell what it shows.
+---@class GossipTitleButton : Button
+---@field GetElementData? fun(self: GossipTitleButton): GossipElementData?
+
+---@type number
+GOSSIP_BUTTON_TYPE_OPTION = 3
+
+---The buttons of the gossip frame, which show a tooltip when hovered.
+---@class GossipTitleButtonMixin
+---@field OnEnter fun(self: GossipTitleButton)
+---@field OnLeave fun(self: GossipTitleButton)
+GossipTitleButtonMixin = {}
+
 --
 -- MARK: Blizzard_Settings
 --

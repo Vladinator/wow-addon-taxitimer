@@ -10,6 +10,6 @@
 ## X-Wago-ID: WqKQPy6x
 ## X-AddonProvider: github
 libs\LibStub\LibStub.lua
-libs\TaxiTimerLib\TaxiTimerLib.xml
+libs\TaxiTimerLib\embed.xml
 libs\LibEditMode\embed.xml
 core.lua

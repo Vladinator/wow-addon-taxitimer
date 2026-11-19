@@ -516,6 +516,20 @@ local function GetTaxiPath(from, to)
 	return GetTaxiPathNodes(pathId)
 end
 
+---@param from number
+---@param to number
+---@return boolean
+function lib.IsFlightPathValid(from, to)
+	if not hasLookup then
+		BuildLookup()
+	end
+
+	local destinations = pathLookup[from]
+	local pathId = destinations and destinations[to]
+
+	return pathId and true or false
+end
+
 local MAX_BRIDGE_HOPS = 4 -- paths a trip between two taxi nodes can be made of when the game does not tell us the taxi nodes in between
 local bridges = {} ---@type table<number, table<number, number[]|false>> `[from][to] = taxi nodes` of the trip from one taxi node to the other, including both
 local neighbors = {} ---@type table<number, number[]> The taxi nodes there is a path to from a taxi node, in rising order.

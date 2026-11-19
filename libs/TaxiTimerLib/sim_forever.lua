@@ -69,5 +69,5 @@ sim.AREA_SPACING = {
 sim.PATH_SPEEDS = {
 }
 
----@diagnostic disable-next-line: deprecated
+---@diagnostic expect-next-line: deprecated
 lib.SetSimulation(sim, MINOR)

@@ -172,5 +172,5 @@ sim.PATH_SPEEDS = {
 	[11186] = { [1] = 30, [3] = 45, [4] = 50, [8] = 45, [9] = 30 }, -- The Den, Harandar > Har'athir, Harandar
 }
 
----@diagnostic disable-next-line: deprecated
+---@diagnostic expect-next-line: deprecated
 lib.SetSimulation(sim, MINOR)

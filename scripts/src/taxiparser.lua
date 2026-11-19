@@ -314,7 +314,7 @@ function Parser:write(outfile, libMinor)
 	end
 
 	local file = assert(io.open(outfile, "wb"))
-	file:write(concat(lua, "\r\n"), "\r\n\r\n---@diagnostic disable-next-line: deprecated\r\nlib.SetDatabase(db, MINOR)\r\n")
+	file:write(concat(lua, "\r\n"), "\r\n\r\n---@diagnostic expect-next-line: deprecated\r\nlib.SetDatabase(db, MINOR)\r\n")
 	file:close()
 end
 
