@@ -88,6 +88,6 @@ Commonly used:
 lua scripts/launcher.lua --no-svg
 ```
 
-## Clearing the flight records in the game
+## Clearing the gossip and flight records in the game
 
-Recorded flights stay in the SavedVariables file until they are removed with `/run wipe(TaxiTimerDB.flights)`. They add loading time and memory, so turn recording off and wipe them once `analyze.lua` has added them to `recordings.lua`.
+Recorded flights stay in the SavedVariables file until they are removed with `/run wipe(TaxiTimerDB.flights) wipe(TaxiTimerDB.gossipFlights)`. They add loading time and memory, so turn recording off and wipe them once `analyze.lua` has added them to `recordings.lua`.
