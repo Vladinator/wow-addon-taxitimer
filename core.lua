@@ -11,6 +11,14 @@ local function issecretvalue(value)
 	return _issecretvalue and _issecretvalue(value) and true or false
 end
 
+---@param frame Frame
+---@param event WowEvent
+local function RegisterFrameEvent(frame, event)
+	if C_EventUtils.IsEventValid(event) then
+		frame:RegisterEvent(event)
+	end
+end
+
 ---@param text string
 local function print(text, ...)
 	DEFAULT_CHAT_FRAME:AddMessage(format(text, ...), 1, 1, 0)
@@ -2822,7 +2830,7 @@ end
 local AddOn do
 
 	AddOn = CreateFrame("Frame") ---@class AddOnFrame
-	AddOn:RegisterEvent("ADDON_LOADED")
+	RegisterFrameEvent(AddOn, "ADDON_LOADED")
 
 	local function CheckFrames()
 		local numLoaded, numTotal = 0, 0
@@ -3015,8 +3023,8 @@ local GossipFlight do
 		ResolveSelectedOption(true, orderIndex, text, confirmed)
 	end)
 
-	AddOn:RegisterEvent("GOSSIP_SHOW")
-	AddOn:RegisterEvent("GOSSIP_OPTIONS_REFRESHED")
+	RegisterFrameEvent(AddOn, "GOSSIP_SHOW")
+	RegisterFrameEvent(AddOn, "GOSSIP_OPTIONS_REFRESHED")
 
 	---@param self AddOnFrame
 	---@param event WowEvent
