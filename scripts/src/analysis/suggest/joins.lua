@@ -45,6 +45,25 @@ return function(ctx, common)
 		return ofNode
 	end
 
+	-- the taxi nodes a flight went past in the order it flew them, which includes the ones the game did not give as part of the route (a taxi node that is not shown on the map but is flown past)
+	---@param record FlightRecord
+	---@return number[]
+	local function flownNodes(record)
+		local route = record.route or {}
+		local nodes = { route[1] } ---@type number[]
+		for i = 1, #route - 1 do
+			local trip = record.trips and record.trips[i]
+			if trip and #trip >= 2 then
+				for k = 2, #trip do
+					nodes[#nodes + 1] = trip[k]
+				end
+			else
+				nodes[#nodes + 1] = route[i + 1]
+			end
+		end
+		return nodes
+	end
+
 	-- the taxi nodes that were flown past, by the paths the flights arrived and left by
 	---@param analyses FlightAnalysis[]
 	---@return table<string, SuggestJoin> byKey
@@ -52,7 +71,7 @@ return function(ctx, common)
 	local function collectJoins(analyses)
 		local byKey, order = {}, {} ---@type table<string, SuggestJoin>, string[]
 		for _, a in ipairs(analyses) do
-			local route = a.record.route or {}
+			local route = flownNodes(a.record)
 			if not a.incomplete and #a.track >= 2 and a.record.area and a:geometry() then
 				for k = 2, #route - 1 do
 					local from, node, to = route[k - 1], route[k], route[k + 1]
@@ -154,7 +173,7 @@ return function(ctx, common)
 				lines[#lines + 1] = format("      %d flight%s from %s to %s, %.0f sec closer each with it", count, plural, join.flights[1].data.nodeName(from), join.flights[1].data.nodeName(to), (now - with) / count)
 			elseif closer then
 				kept[#kept + 1] = override(lib.Sim, "NODE_JOINS", node, flownJoin)
-				lines[#lines + 1] = format("    %s NODE_JOINS:    [%d] = { [%d] = { [%d] = { %s } } }, -- %s (%d flight%s, %.0f sec closer each with it)", has and "change in" or "add to", node, from, to, flown, name, count, plural, (now - with) / count)
+				lines[#lines + 1] = format("    %s NODE_JOINS:    [%d] = { [%d] = { [%d] = { %s } } }, -- %s (%d flight%s, %.0f sec closer each with it%s)", has and "change in" or "add to", node, from, to, flown, name, count, plural, (now - with) / count, common.thinNote(count))
 			end
 		elseif has then
 			-- the simulation may fly it right without the entry by now
@@ -163,7 +182,7 @@ return function(ctx, common)
 			restore()
 			if without - now < JOIN_MIN_SECONDS * count then
 				kept[#kept + 1] = override(lib.Sim, "NODE_JOINS", node, withJoin(lib.Sim.NODE_JOINS, node, from, to, nil))
-				lines[#lines + 1] = format("    remove from NODE_JOINS:    [%d] = { [%d] = { [%d] = ... } } -- %s (the %d flight%s past it are as close without it)", node, from, to, name, count, plural)
+				lines[#lines + 1] = format("    remove from NODE_JOINS:    [%d] = { [%d] = { [%d] = ... } } -- %s (the %d flight%s past it are as close without it%s)", node, from, to, name, count, plural, common.thinNote(count))
 			end
 		end
 		return now, with, has, name

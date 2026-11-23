@@ -52,11 +52,32 @@ sim.RETRACE_EXCEPTIONS = {
 -- `[node] = { [from] = { [to] = { last, first } } }` when flying from the taxi node `from` past `node` to the taxi node `to`:
 -- `last` is the last point that is flown of the path arriving at `node`, and `first` the first point that is flown of the path leaving it.
 sim.NODE_JOINS = {
+	[61] = { -- Splintertree Post, Ashenvale
+		[354] = { [166] = { 17, 5 } }, -- The Mor'Shan Ramparts, Ashenvale > Emerald Sanctuary, Felwood
+	},
 	[1382] = { -- Twilight Glade, Shadowmoon Valley
 		[1509] = { [1467] = { 8, 1 } }, -- Talon Watch, Spires of Arak > The Draakorium, Shadowmoon Valley
 	},
+	[1447] = { -- Fort Wrynn (Alliance), Talador
+		[1448] = { [1645] = { 5, 5 } }, -- Redemption Rise, Talador > The Iron Front, Tanaan Jungle
+	},
 	[1506] = { -- Telaari Station, Nagrand
 		[1503] = { [1573] = { 7, 7 } }, -- Throne of the Elements, Nagrand > Nivek's Overlook, Nagrand
+	},
+	[1858] = { -- Meredil, Suramar
+		[1615] = { [1879] = { 13, 6 } }, -- Challiane's Terrace, Azsuna > Crimson Thicket, Suramar
+		[1879] = { [1615] = { 7, 1 } }, -- Crimson Thicket, Suramar > Challiane's Terrace, Azsuna
+	},
+	[1859] = { -- Felblaze Ingress, Azsuna
+		[1774] = { [1615] = { 13, 5 } }, -- Dalaran > Challiane's Terrace, Azsuna
+	},
+	[1879] = { -- Crimson Thicket, Suramar
+		[1858] = { [1863] = { 8, 4 } }, -- Meredil, Suramar > Hafr Fjall, Stormheim
+		[1863] = { [1858] = { 6, 5 } }, -- Hafr Fjall, Stormheim > Meredil, Suramar
+	},
+	[2058] = { -- Staghelm Point, Silithus
+		[386] = { [653] = { 14, 5 } }, -- Mossy Pile, Un'Goro Crater > Oasis of Vir'sar, Uldum
+		[653] = { [41] = { 17, 4 }, [386] = { 17, 4 } }, -- Oasis of Vir'sar, Uldum > Feathermoon, Feralas; Mossy Pile, Un'Goro Crater
 	},
 	[2076] = { -- Atal'Gral, Zuldazar
 		[2147] = { [2126] = { 4, 4 } }, -- Castaway Encampment, Zuldazar > Scaletrader Post, Zuldazar
@@ -102,8 +123,10 @@ sim.NODE_SPEEDS = {
 	[2442] = 50, -- Overspark Expedition Camp, Mechagon
 }
 
--- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
-sim.CARRY_SPEED = false
+-- Taxi maps where a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins, a slow part of a path goes on past the taxi node).
+sim.AREA_CARRY = {
+	[2276] = true, -- Khaz Algar
+}
 
 -- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
 sim.AREA_FIXED_TIME = {
@@ -132,17 +155,21 @@ sim.AREA_RAMPS = {
 -- Stretches with a speed from `PATH_SPEEDS` or `AREA_RAMPS` do not use these.
 sim.AREA_SPACING = {
 	[993] = { { 60, 15 }, { 100, 30 }, { 130, 40 } }, -- Broken Isles
-	[1922] = { { 80, 20 } }, -- Draenor
+	[1922] = { { 100, 40 } }, -- Draenor
 	[2175] = { { 80, 15 }, { 100, 35 } }, -- Zaralek Cavern
 }
 
 -- Paths that change the flight speed as they pass their points, as `[pathId] = { [point index] = speed }`. The speed is flown from that point until a later point of the path changes it.
 -- These speeds are not part of the client data, so they come from recorded flights. The first point of a path must have a speed.
 sim.PATH_SPEEDS = {
+	[4225] = { [1] = 30, [3] = 40, [6] = 45, [8] = 40 }, -- Fort Wrynn (Alliance), Talador > Zangarra, Talador
+	[4542] = { [7] = 40 }, -- Apexis Excavation, Spires of Arak > Exarch's Refuge, Talador
+	[5111] = { [8] = 35 }, -- Malo's Lookout, Tanaan Jungle > Aktar's Post, Tanaan Jungle
+	[5982] = { [1] = 50 }, -- Meredil, Suramar > Crimson Thicket, Suramar
+	[6124] = { [8] = 40, [9] = 30, [10] = 50, [11] = 20, [12] = 50 }, -- Dalaran > Deliverance Point, Broken Shore
 	[6466] = { [1] = 25, [3] = 40, [6] = 30, [8] = 15, [9] = 10 }, -- Barbthorn Ridge, Drustvar > Fallhaven, Drustvar
 	[6683] = { [1] = 15, [2] = 25, [3] = 40, [6] = 25 }, -- Watchman's Rise, Drustvar > Whitegrove Chapel, Drustvar
 	[6688] = { [1] = 15, [2] = 25, [3] = 40, [12] = 25 }, -- Arom's Stand, Drustvar > Fletcher's Hollow, Drustvar
-	[6842] = { [1] = 15, [3] = 20, [4] = 30, [5] = 40, [12] = 25, [13] = 15 }, -- Tidecross, Stormsong Valley > Brennadam, Stormsong Valley
 	[6876] = { [1] = 10, [2] = 15, [3] = 25, [4] = 35, [5] = 40, [10] = 35, [11] = 25, [12] = 15 }, -- Tortaka Refuge, Vol'dun > Vulture's Nest, Vol'dun
 	[6932] = { [1] = 20, [3] = 30, [4] = 40, [19] = 25, [20] = 15 }, -- Millstone Hamlet, Stormsong Valley > Roughneck Camp, Tiragarde Sound
 	[6943] = { [1] = 40, [6] = 25 }, -- Atal'Gral, Zuldazar > Castaway Encampment, Zuldazar
@@ -165,11 +192,60 @@ sim.PATH_SPEEDS = {
 	[8673] = { [1] = 30, [2] = 40, [3] = 50, [4] = 40 }, -- Antecedent Isle, Zereth Mortis > Zovaal's Grasp, Zereth Mortis
 	[8674] = { [1] = 30, [2] = 40, [3] = 50, [4] = 40 }, -- Zovaal's Grasp, Zereth Mortis > Antecedent Isle, Zereth Mortis
 	[8684] = { [1] = 50, [3] = 40 }, -- Sepulcher Of The First Ones, Zereth Mortis > Sepulcher Overlook, Zereth Mortis
+	[9376] = { [3] = 40, [7] = 25 }, -- Old Loamm Road, Zaralek Cavern > Dragonscale Camp, Zaralek Cavern
 	[9382] = { [1] = 25 }, -- Old Loamm Road, Ohn'ahran Plains > Old Loamm Road, Zaralek Cavern
-	[9751] = { [1] = 20, [2] = 40, [3] = 50, [16] = 45, [17] = 40, [18] = 50, [19] = 40, [24] = 25 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
+	[9591] = { [10] = 30, [11] = 20 }, -- Faerin's Advance, Azj-Kahet > Weaver's Lair, Azj-Kahet
+	[9751] = { [16] = 45, [17] = 40, [18] = 50 }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
 	[9761] = { [1] = 45, [4] = 40, [5] = 30, [6] = 65, [7] = 100, [9] = 65, [10] = 45, [15] = 55, [16] = 35, [21] = 30 }, -- Dornogal, Isle of Dorn > Gundargaz, The Ringing Deeps
-	[10148] = { [1] = 65 }, -- Opportunity Point, The Ringing Deeps > Gutterville, The Ringing Deeps
 	[11186] = { [1] = 30, [3] = 45, [4] = 50, [8] = 45, [9] = 30 }, -- The Den, Harandar > Har'athir, Harandar
+}
+
+-- The speeds a path is flown at when the flight takes off on it or lands on it, as `[pathId] = { takeoff = { speed of each point }, landing = { speed of each point } }`. They are the speeds of `AREA_RAMPS` for the path: the ramps of the taxi map are not used at the end of the flight where the path has its own.
+-- A flight that passes through a taxi node does not take off or land there, it keeps its speed, so these are only used where the flight begins or ends. `PATH_SPEEDS` are used wherever the path is flown.
+-- These speeds are not part of the client data, so they come from recorded flights.
+---@type table<number, TaxiTimerLib-1.0_PathRamp>
+sim.PATH_RAMPS = {
+	[4542] = { takeoff = { 30, 30, 40, 40 } }, -- Apexis Excavation, Spires of Arak > Exarch's Refuge, Talador
+	[4543] = { takeoff = { 15, 30, 40 } }, -- Stormshield (Alliance), Ashran > Wildwood Wash, Gorgrond
+	[4787] = { takeoff = { 15, 25, 40, 40, 40 } }, -- Stormshield (Alliance), Ashran > Shattrath City, Talador
+	[5052] = { takeoff = { 15, 30, 40 }, landing = { 40, 30, 25 } }, -- The Iron Front, Tanaan Jungle > Aktar's Post, Tanaan Jungle
+	[5054] = { takeoff = { 15, 30, 40 }, landing = { 40, 30, 25 } }, -- Aktar's Post, Tanaan Jungle > Vault of the Earth, Tanaan Jungle
+	[5062] = { takeoff = { 15, 25, 30, 40 }, landing = { 40, 30 } }, -- The Iron Front, Tanaan Jungle > Lion's Watch, Tanaan Jungle
+	[5063] = { takeoff = { 15, 25, 30, 40 }, landing = { 40, 30 } }, -- Vault of the Earth, Tanaan Jungle > The Iron Front, Tanaan Jungle
+	[5064] = { takeoff = { 15, 25, 30, 40 }, landing = { 40, 30 } }, -- Aktar's Post, Tanaan Jungle > The Iron Front, Tanaan Jungle
+	[5065] = { takeoff = { 15, 25, 30, 40 }, landing = { 40, 30 } }, -- Vault of the Earth, Tanaan Jungle > Lion's Watch, Tanaan Jungle
+	[5079] = { takeoff = { 15, 30, 40 }, landing = { 40, 30 } }, -- Bastion Rise, Gorgrond > The Iron Front, Tanaan Jungle
+	[5111] = { takeoff = { 15, 35, 40 } }, -- Malo's Lookout, Tanaan Jungle > Aktar's Post, Tanaan Jungle
+	[5119] = { takeoff = { 15, 30, 40 }, landing = { 45, 40, 30 } }, -- Vault of the Earth, Tanaan Jungle > Malo's Lookout, Tanaan Jungle
+	[5400] = { takeoff = { 15, 30, 40 }, landing = { 40, 20 } }, -- Ironhorn Enclave, Highmountain > Obsidian Overlook, Highmountain
+	[5843] = { takeoff = { 15, 30, 40 }, landing = { 30, 20 } }, -- Dalaran > Hafr Fjall, Stormheim
+	[5857] = { takeoff = { 10, 15, 20, 30, 40 }, landing = { 40, 40, 40, 40, 40, 30 } }, -- Meredil, Suramar > Dalaran
+	[6124] = { takeoff = { 15, 30, 40 } }, -- Dalaran > Deliverance Point, Broken Shore
+	[6126] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- Deliverance Point, Broken Shore > Aalgen Point, Broken Shore
+	[6675] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Arom's Stand, Drustvar > Watchman's Rise, Drustvar
+	[6677] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Watchman's Rise, Drustvar > Arom's Stand, Drustvar
+	[6690] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Falconhurst, Drustvar > Arom's Stand, Drustvar
+	[6763] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Whitegrove Chapel, Drustvar > Anyport, Drustvar
+	[6767] = { takeoff = { 15, 25 }, landing = { 25 } }, -- Scaletrader Post, Zuldazar > Nesingwary's Gameland, Zuldazar
+	[6836] = { takeoff = { 20, 20, 30 }, landing = { 25, 15 } }, -- Brennadam, Stormsong Valley > The Amber Waves, Stormsong Valley
+	[6840] = { takeoff = { 15, 15, 25 }, landing = { 25, 15 } }, -- Tidecross, Stormsong Valley > Mildenhall Meadery, Stormsong Valley
+	[6842] = { takeoff = { 15, 15, 20, 30 }, landing = { 25, 15 } }, -- Tidecross, Stormsong Valley > Brennadam, Stormsong Valley
+	[6843] = { takeoff = { 15, 15, 25, 30 }, landing = { 25, 15 } }, -- Brennadam, Stormsong Valley > Tidecross, Stormsong Valley
+	[6860] = { takeoff = { 20, 20, 30 }, landing = { 25, 15 } }, -- Fort Daelin, Stormsong Valley > Seekers Vista, Stormsong Valley
+	[6861] = { takeoff = { 15, 15, 20, 30 }, landing = { 25, 15 } }, -- Tidecross, Stormsong Valley > Seekers Vista, Stormsong Valley
+	[6880] = { takeoff = { 15, 15, 25, 35 }, landing = { 35, 25, 15 } }, -- Vulture's Nest, Vol'dun > Shatterstone Harbor, Vol'dun
+	[6883] = { takeoff = { 15, 15, 25, 35 }, landing = { 35, 25, 15 } }, -- Shatterstone Harbor, Vol'dun > Sanctuary of the Devoted, Vol'dun
+	[6942] = { takeoff = { 25, 25 }, landing = { 25 } }, -- Castaway Encampment, Zuldazar > Atal'Gral, Zuldazar
+	[6945] = { takeoff = { 25, 25 }, landing = { 25 } }, -- Seeker's Outpost, Zuldazar > Castaway Encampment, Zuldazar
+	[7073] = { takeoff = { 25, 25 }, landing = { 25 } }, -- Fletcher's Hollow, Drustvar > Vigil Hill, Tiragarde Sound
+	[9353] = { takeoff = { 25, 25 }, landing = { 25 } }, -- Dragonscale Camp, Zaralek Cavern > Loamm, Zaralek Cavern
+	[9590] = { takeoff = { 20, 25, 40 }, landing = { 30 } }, -- Weaver's Lair, Azj-Kahet > Faerin's Advance, Azj-Kahet
+	[9591] = { takeoff = { 30, 30, 40 } }, -- Faerin's Advance, Azj-Kahet > Weaver's Lair, Azj-Kahet
+	[9673] = { takeoff = { 20, 35 } }, -- Dunelle's Kindness, Hallowfall > Hillhelm Family Farm, Hallowfall
+	[9751] = { takeoff = { 20, 40 }, landing = { 40, 40, 40, 40, 40, 25 } }, -- Gundargaz, The Ringing Deeps > Dornogal, Isle of Dorn
+	[11198] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- The Den, Harandar > Har'mara, Harandar
+	[11199] = { takeoff = { 30, 30, 30, 40 }, landing = { 40, 30 } }, -- Har'mara, Harandar > Har'kuai, Harandar
+	[11200] = { takeoff = { 30, 30, 40 }, landing = { 40, 30 } }, -- Har'kuai, Harandar > Har'mara, Harandar
 }
 
 ---@diagnostic expect-next-line: deprecated

@@ -47,6 +47,10 @@ The output lists each flight with how far off the simulation is now, the flights
 | `--wow=FOLDER` | Take the flights from the SavedVariables of every game in the World of Warcraft folder (`_retail_`, `_classic_`, `_forever_` and so on, in every account). |
 | `--apply` | Write the suggested changes to the sim file and analyze again until nothing is left. Unsure suggestions are shown, not written. |
 | `--coverage` | Show how much of each map has been flown, and the maps without flights. |
+| `--check` | Check the simulation against `data/baseline.lua`, which holds the seconds it was off by for every recorded flight when it was accepted as good. It fails (exit code 1) and lists the flights that got worse by more than the tolerance (1 sec, `--tolerance=S`) or if more flights are off by the worst seconds. Run it after any change to the simulation, the sim files or the library. |
+| `--update-baseline` | Make what the simulation does now the baseline, after a change that was looked into and is good. |
+| `--thin` | With `--apply`, also write the suggestions that go by one flight. They say "based on one flight" and are held back otherwise, as a flight with lag or a stop can be anything. |
+| `--prune[=MAP]` | Look at the entries of the sim file for single paths (`PATH_SPEEDS`, `PATH_RAMPS`) and suggest taking out the ones the flights do not need, for one taxi map or all of them, in place of the other suggestions. Shows how each taxi map is estimated with and without its entries, which entries go by one flight, and which have no flight. Run the analysis again after it (the taxi maps are then fitted without them). A normal run says when a taxi map has flights 10 sec or more off, as a reason to run this. |
 | `--joins` | List every taxi node that was flown past, with the points flown there, and a table of the nodes where the game could cut a loop with how much the cut saves (to see if one rule fits them all). |
 | `--speeds` | Show the speed each path was flown at from each of its points. |
 | `--flight=N` / `--all` | Show the details of flight N (can be repeated), or of every flight. |
@@ -87,6 +91,17 @@ Commonly used:
 ```
 lua scripts/launcher.lua --no-svg
 ```
+
+## Checking that a change did not make the timers worse
+
+Two checks, both of which fail (exit code 1) and say what, so they can be run after every change to the addon or the simulation:
+
+```
+lua scripts/tests/run.lua
+lua scripts/analyze.lua --check
+```
+
+The first runs the code of the addon (the flights of the GPS, the gossip flights, the settings and the saved options) against a stand-in for the game. The second replays every recorded flight through the simulation and compares what it estimates to `data/baseline.lua`, which has the seconds it was off by for each flight when it was accepted as good, and fails when a flight got more than a second worse or more flights are off by the worst seconds. After a change that was looked into and is good, `lua scripts/analyze.lua --update-baseline` makes what the simulation does now the baseline.
 
 ## Clearing the gossip and flight records in the game
 

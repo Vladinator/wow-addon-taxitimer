@@ -15,6 +15,13 @@
 ---@field keepSuperseded boolean
 ---@field archivePath? string The file every flight is kept in.
 ---@field apply boolean
+---@field thin boolean Also write the suggestions that go by one flight.
+---@field check boolean Check the simulation against the baseline, in place of the analysis.
+---@field updateBaseline boolean Make what the simulation does now the baseline.
+---@field tolerance number The seconds a flight can get worse by compared to the baseline.
+---@field baselinePath string The file the baseline is kept in.
+---@field prune boolean Look at the entries of the sim file for single paths that are not needed, in place of the other suggestions.
+---@field pruneMap? number Only look at the taxi map.
 ---@field worstSeconds number
 ---@field near number
 ---@field far number
@@ -28,7 +35,7 @@ return function(ctx)
 	---@param scriptPath string
 	---@return never
 	local function usage(scriptPath)
-		warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--wow=FOLDER] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--apply] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
+		warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--wow=FOLDER] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--apply] [--thin] [--check] [--update-baseline] [--tolerance=1] [--prune[=MAP]] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
 		os.exit(1)
 	end
 
@@ -44,6 +51,12 @@ return function(ctx)
 			keepSuperseded = false,
 			archivePath = ctx.dataDir .. "/recordings.lua",
 			apply = false,
+			thin = false,
+			check = false,
+			updateBaseline = false,
+			tolerance = 1,
+			baselinePath = ctx.dataDir .. "/baseline.lua",
+			prune = false,
 			worstSeconds = 5,
 			near = 25,
 			far = 60,
@@ -64,6 +77,21 @@ return function(ctx)
 				opts.archivePath = option:match("=(.+)$")
 			elseif option == "--apply" then
 				opts.apply = true
+			elseif option == "--thin" then
+				opts.thin = true
+			elseif option == "--check" then
+				opts.check = true
+			elseif option == "--update-baseline" then
+				opts.updateBaseline = true
+			elseif option:match("^--tolerance=[%d.]+$") then
+				opts.tolerance = tonumber(option:match("=([%d.]+)")) or opts.tolerance
+			elseif option:match("^--baseline=.+$") then
+				opts.baselinePath = option:match("=(.+)$")
+			elseif option == "--prune" then
+				opts.prune = true
+			elseif option:match("^--prune=%d+$") then
+				opts.prune = true
+				opts.pruneMap = tonumber(option:match("=(%d+)"))
 			elseif option == "--coverage" then
 				opts.coverage = true
 			elseif option:match("^--worst=[%d.]+$") then

@@ -11,7 +11,7 @@
 ---@field text string The suggestion as it was shown.
 
 ---Writes the suggestions into a sim file, and returns how many were written and the ones that were not.
----@alias ApplyChanges fun(simFile: string, suggestions: string[], data: TaxiData): number, string[]
+---@alias ApplyChanges fun(simFile: string, suggestions: string[], data: TaxiData, includeThin?: boolean): number, string[]
 
 ---@param ctx AnalysisContext
 ---@return ApplyChanges
@@ -20,7 +20,10 @@ return function(ctx)
 	local format = string.format
 
 	-- the suggestions that need more flights before they are written, by what the line after them or their comment says
-	local UNSURE = { "not sure about point", "only one flight starts at this taxi node" }
+	local UNSURE = { "not sure about point", "not sure about this one" }
+
+	-- the ones that go by one flight, which are only written when asked for
+	local THIN = { "based on one flight", "only one flight starts at this taxi node" }
 
 	-- how a suggestion begins: the action and the word that comes after it
 	local ACTIONS = { { "add", "to" }, { "change", "in" }, { "remove", "from" } }
@@ -57,9 +60,10 @@ return function(ctx)
 	end
 
 	---@param suggestions string[]
+	---@param includeThin boolean
 	---@return AppliedChange[] changes
 	---@return string[] held The suggestions that are not written.
-	local function parse(suggestions)
+	local function parse(suggestions, includeThin)
 		local changes, held = {}, {} ---@type AppliedChange[], string[]
 		for i, line in ipairs(suggestions) do
 			local text = trim(line)
@@ -79,6 +83,11 @@ return function(ctx)
 				end
 				for _, words in ipairs(UNSURE) do
 					if text:find(words, 1, true) or after:find(words, 1, true) then
+						unsure = true
+					end
+				end
+				for _, words in ipairs(THIN) do
+					if not includeThin and (text:find(words, 1, true) or after:find(words, 1, true)) then
 						unsure = true
 					end
 				end
@@ -193,10 +202,14 @@ return function(ctx)
 		for _, node in ipairs(util.keys(joins)) do
 			local entries = {} ---@type string[]
 			for _, from in ipairs(util.keys(joins[node])) do
+				-- all of the joins from a taxi node are in one entry, a key that is written twice would only keep the last
+				local targets, names = {}, {} ---@type string[], string[]
 				for _, to in ipairs(util.keys(joins[node][from])) do
 					local join = joins[node][from][to]
-					entries[#entries + 1] = format("\t\t[%d] = { [%d] = { %d, %d } }, -- %s > %s", from, to, join[1], join[2], data.nodeName(from), data.nodeName(to))
+					targets[#targets + 1] = format("[%d] = { %d, %d }", to, join[1], join[2])
+					names[#names + 1] = data.nodeName(to)
 				end
+				entries[#entries + 1] = format("\t\t[%d] = { %s }, -- %s > %s", from, table.concat(targets, ", "), data.nodeName(from), table.concat(names, "; "))
 			end
 			if #entries > 0 then
 				block[#block + 1] = format("\t[%d] = { -- %s", node, data.nodeName(node))
@@ -219,10 +232,11 @@ return function(ctx)
 	---@param simFile string
 	---@param suggestions string[] The suggestions as they were shown.
 	---@param data TaxiData The taxi data of the game the sim file is for.
+	---@param includeThin? boolean Also write the suggestions that go by one flight.
 	---@return number applied How many changes were written.
 	---@return string[] held The suggestions that were not written, as they need more flights or a look.
-	return function(simFile, suggestions, data)
-		local changes, held = parse(suggestions)
+	return function(simFile, suggestions, data, includeThin)
+		local changes, held = parse(suggestions, includeThin or false)
 		if #changes == 0 then
 			return 0, held
 		end

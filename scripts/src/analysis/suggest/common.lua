@@ -9,7 +9,7 @@
 ---@field seconds number How long the flight took, without the time spent loading.
 
 ---The tables of the simulation that are changed for a moment.
----@alias SuggestTable "AREA_SPEEDS"|"AREA_DISTANCE_SCALE"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_DISTANCE_SCALE"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"|"PATH_RAMPS"
 
 ---The tables of the simulation as they were when the suggestions began, the changes that are tried are in the entries of these.
 ---@class SuggestSim
@@ -18,18 +18,21 @@
 ---@field spacing table<number, number[][]>
 ---@field nodes table<number, number>
 ---@field paths table<number, table<number, number>>
+---@field pathRamps table<number, TaxiTimerLib-1.0_PathRamp>
 
 ---What is looked at for one taxi map. Each part of the suggestions adds what it suggests to `out`, and what puts back what it changed to `restores`.
 ---@class SuggestMap
 ---@field lib TaxiTimerLib-1.0
 ---@field sim SuggestSim
 ---@field scale number
+---@field transit table<number, number> The taxi nodes that flights only pass through, which are not places to fly from or to.
 ---@field map number The taxi map.
 ---@field flights FlightAnalysis[] The flights on it.
 ---@field cruise number The speed most of the time was flown at.
 ---@field tried SuggestFlight[] The flights the speeds are tried on, filled in when they are observed.
 ---@field out string[]
 ---@field restores (fun())[]
+---@field odd number How many of the flights are `ODD_SECONDS` or more off with the tables the simulation has (filled in when the suggestions for the taxi map are done).
 ---@field average number How far off the estimates of the flights are, as the seconds on average.
 ---@field worst number And at worst.
 
@@ -42,6 +45,15 @@ return function(ctx)
 	local common = {}
 
 	common.PATH_MIN_SECONDS = 5 -- seconds a path must differ from the speeds of its taxi map before it is suggested to have its own speeds
+	common.ODD_SECONDS = 10 -- seconds a flight can be off by before the data of its taxi map looks odd
+	common.THIN = "based on one flight" -- what a suggestion says when one flight is all there is to go by, it is not written unless asked for
+
+	-- how a suggestion says it goes by one flight, to put at the end of what is in brackets after it
+	---@param flights number How many flights it goes by.
+	---@return string
+	function common.thinNote(flights)
+		return flights < 2 and (", " .. common.THIN) or ""
+	end
 
 	-- sets `sim[name][key]` and returns what puts it back
 	---@param lib TaxiTimerLib-1.0_Sim
@@ -79,6 +91,20 @@ return function(ctx)
 			return 0, 0
 		end
 		return sum / count, worst
+	end
+
+	-- how many seconds the estimate of each of the flights is off by, in the order of the flights, with the tables the simulation has now
+	---@param lib TaxiTimerLib-1.0
+	---@param area number
+	---@param flights SuggestFlight[]
+	---@return number[] errors
+	function common.flightErrors(lib, area, flights)
+		local errors = {} ---@type number[]
+		for i, flight in ipairs(flights) do
+			local result = lib.GetFlightInfoFromGeometry(flight.geometry, area, flight.analysis.record.speedModifier)
+			errors[i] = result and abs(flight.seconds - result.duration) or 0
+		end
+		return errors
 	end
 
 	-- how many seconds the estimates of the flights are off by in all, with the tables the simulation has now

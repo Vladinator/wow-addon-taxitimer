@@ -12,6 +12,8 @@ With `--apply` the changes are written to the sim file and the flights are analy
 Before that it lists the flights the simulation is still off by with the sim file as it is now, and what makes each of them differ (the distance and how the taxi nodes were flown past, the speed of a path, loading).
 Then how the game flies past taxi nodes where the simulation does it another way (`NODE_JOINS` and `RETRACE_EXCEPTIONS`), going by where the flights went.
 The gossip options that put the player on a flight we have nothing for (`gossipFlights` of the saved variables, kept in `data/recordings_gossip.lua`) are listed last, with the flights between the taxi nodes near where they started and ended that take as long as they did, and the line to add to `GossipToFlight` when it is clear which one it was.
+Taxi nodes that every flight only passes through (never a start or an end, like Old Loamm Road between Zaralek Cavern and Ohn'ahran Plains) are found from the flights: the paths at them are judged from the flights that cross them, as they can not be flown on their own, and they are not suggested to be flown.
+How a flight takes off and lands is told apart from the speeds of a path: what is flown slower than the taxi map where a flight begins or ends on a path is the speeds of taking off and landing of the path (`PATH_RAMPS`), and is only used there, as a flight that passes a taxi node keeps its speed.
 Some paths change the flight speed as they pass their points. These speeds are not part of the client files, so recorded flights are the only source for them.
 
 Runs in Lua 5.1 and later (use `lua`, `lua5.1`, `luajit` or the Lua of the Lua language server):
@@ -33,6 +35,12 @@ Options:
 	--worst=SECONDS the seconds a flight must be off by with the sim file as it is now to be listed with what causes it (default 5)
 	--coverage      show how much of each map has been flown, the paths that have no flight of their own yet (all on a small map, the shortest on a big one), and the maps without flights, to see where to fly next
 	--joins         list every taxi node that was flown past with the points that were flown there, to see where the simulation flies past a node another way than the game
+	--thin          with --apply, also write the suggestions that go by one flight (they say so, and are held back as they are only as good as that flight)
+	--prune[=MAP]   look at the entries of the sim file for single paths (PATH_SPEEDS and PATH_RAMPS) and suggest taking out the ones the flights do not need, for one taxi map or all of them (in place of the other suggestions, run the analysis again after)
+	--check         check the simulation against the baseline (`data/baseline.lua`, the seconds it was off by for every flight when it was accepted as good) in place of the analysis: it fails (exit code 1) if a flight is more than the tolerance worse or more flights are off by the worst seconds, and says which, so a change that makes timers worse is found before it is accepted
+	--update-baseline make what the simulation does now the baseline (after a change that was looked into and is good)
+	--tolerance=S   the seconds a flight can get worse by for --check (default 1)
+	--baseline=FILE the file the baseline is kept in (default is `data/baseline.lua` next to this script)
 	--apply         write the suggested changes to the sim file, and analyze again until there is nothing left to change (the suggestions that need more flights are shown and left out)
 	--archive=FILE  the file every flight is kept in (default is `data/recordings.lua` next to this script)
 	--no-archive    only look at the flights of the saved variables, and do not keep them
@@ -67,6 +75,7 @@ local leaveOutSuperseded = dofile(scriptDir .. "/src/analysis/superseded.lua")(c
 local printSummary = dofile(scriptDir .. "/src/analysis/summary.lua")(ctx)
 local printSpeeds = dofile(scriptDir .. "/src/analysis/speeds.lua")(ctx)
 local printCoverage = dofile(scriptDir .. "/src/analysis/coverage.lua")(ctx)
+local checkBaseline = dofile(scriptDir .. "/src/analysis/check.lua")(ctx)
 local printGossip = dofile(scriptDir .. "/src/analysis/gossip.lua")(ctx)
 
 local printf, warn = ctx.util.printf, ctx.util.warn
@@ -115,11 +124,11 @@ end
 ---@param analyses FlightAnalysis[]
 ---@return FlightAnalysis[] analyses The analyses after the changes.
 local function suggestChanges(analyses)
-	local suggested = suggestAll(analyses, opts.simFile, opts.joins)
+	local suggested = suggestAll(analyses, opts.simFile, opts.joins, opts.prune, opts.pruneMap)
 	for pass = 1, opts.apply and 5 or 0 do
 		local written = 0
 		for _, changes in ipairs(suggested) do
-			local count, held = applyChanges(changes.simFile, changes.lines, changes.data)
+			local count, held = applyChanges(changes.simFile, changes.lines, changes.data, opts.thin)
 			written = written + count
 			printf("\n%d change%s written to %s\n", count, count == 1 and "" or "s", changes.simFile)
 			for _, line in ipairs(held) do
@@ -137,7 +146,7 @@ local function suggestChanges(analyses)
 			leaveOutSuperseded(analyses)
 		end
 		printf("\nAgain with the changes (pass %d)\n", pass + 1)
-		suggested = suggestAll(analyses, opts.simFile, false)
+		suggested = suggestAll(analyses, opts.simFile, false, opts.prune, opts.pruneMap)
 	end
 	if opts.apply then
 		local off, total = 0, 0
@@ -169,6 +178,9 @@ end
 
 local analyses = analyzeFlights()
 local superseded = opts.keepSuperseded and {} or leaveOutSuperseded(analyses)
+if opts.check or opts.updateBaseline then
+	os.exit(checkBaseline(analyses, opts) and 0 or 1)
+end
 printSummary(analyses, superseded, source, opts.worstSeconds)
 
 if opts.suggest and #analyses > 0 then

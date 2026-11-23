@@ -75,6 +75,7 @@ return function(ctx)
 
 	local STALL_SECONDS = 3 -- seconds a flight can stand still at the end before it is a wait for the server and not the landing
 	local MAX_STILL_SECONDS = 20 -- seconds a flight can stand still in one go before the game is seen as having lost it (stops along the way are a few seconds)
+	local MAX_HANG_SECONDS = 4 -- seconds the game can go without a sample on one map before the time of the flight is not trusted (a loading screen is between two maps)
 
 	---@class FlightAnalysis
 	local Flight = {}
@@ -313,9 +314,17 @@ return function(ctx)
 			end
 		end
 		-- the game not responding for a while (loading, lag) leaves a hole in what we saw
-		local gap = 0
+		local gap, hang = 0, 0
 		for i = 2, count do
-			gap = max(gap, track[i].t - track[i - 1].t)
+			local seconds = track[i].t - track[i - 1].t
+			gap = max(gap, seconds)
+			-- a loading screen is between two maps, so a hole on the same map is the game not responding, which makes the time the flight took not tell how long the route takes
+			if track[i].map == track[i - 1].map and not self.noPosition then
+				hang = max(hang, seconds)
+			end
+		end
+		if hang >= MAX_HANG_SECONDS and not self.incomplete then
+			self.incomplete = format("the game did not respond for %.1f sec on one map during the flight, so how long it took is not reliable", hang)
 		end
 		if gap > 2 then
 			self.warnings[#self.warnings + 1] = format("nothing was recorded for %.1f sec at one point during the flight (loading screen or the game not responding), the speed and distance around it are less reliable", gap)

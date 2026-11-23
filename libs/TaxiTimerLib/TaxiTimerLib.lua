@@ -79,6 +79,10 @@ lib.FLAVOR = {
 ---@field public takeoff number[] The speeds flown from the first points of the flight, one per point.
 ---@field public landing number[] The speeds flown from the last points before the destination, one per point, the last being the point before the destination.
 
+---@class TaxiTimerLib-1.0_PathRamp
+---@field public takeoff? number[] The speeds flown from the first points of the path when the flight takes off on it, one per point.
+---@field public landing? number[] The speeds flown from the last points before the destination when the flight lands on the path, one per point, the last being the point before the destination.
+
 ---@class TaxiTimerLib-1.0_Point
 ---@field x number
 ---@field y number
@@ -931,19 +935,29 @@ local function GetPointSpeeds(points, areaID)
 	local ramp = areaID and lib.Sim.AREA_RAMPS[areaID]
 	local isDynamic = false
 
+	-- the speeds of taking off and landing are the ones of the path the flight takes off or lands on if it has any, and the ones of the taxi map if not
+	-- a speed that carries on from a flight that is passing through is not slowed down at the node, so the ones of a path are only for when it is where the flight begins or ends
+	local carries = areaID and lib.Sim.AREA_CARRY[areaID]
+	local firstPath, lastPath = points[1] and points[1].pathId, points[numPoints] and points[numPoints].pathId
+	local firstRamp, lastRamp = lib.Sim.PATH_RAMPS[firstPath], lib.Sim.PATH_RAMPS[lastPath]
+	local takeoffs = firstRamp and firstRamp.takeoff or (ramp and ramp.takeoff)
+	local landings = lastRamp and lastRamp.landing or (ramp and ramp.landing)
+	local takeoffOfPath = firstRamp ~= nil and firstRamp.takeoff ~= nil
+	local landingOfPath = lastRamp ~= nil and lastRamp.landing ~= nil
+
 	for i = 1, numPoints do
 		local speed = GetPathSpeed(points[i])
 
 		-- a speed that was set carries on into the next path, the game does not change it as a path begins
 		local previous = points[i - 1]
 
-		if not speed and lib.Sim.CARRY_SPEED and previous and previous.pathId ~= points[i].pathId then
+		if not speed and carries and previous and previous.pathId ~= points[i].pathId then
 			speed = speeds[i - 1] or nil
 		end
 
-		if not speed and ramp then
-			local takeoff = ramp.takeoff[i]
-			local landing = ramp.landing[#ramp.landing - (numPoints - 1 - i)]
+		if not speed and (takeoffs or landings) then
+			local takeoff = takeoffs and (not takeoffOfPath or points[i].pathId == firstPath) and takeoffs[i] or nil
+			local landing = landings and (not landingOfPath or points[i].pathId == lastPath) and landings[#landings - (numPoints - 1 - i)] or nil
 
 			if i < numPoints and (landing or takeoff) then
 				speed = (landing or takeoff) * TAXI_SPEED_SCALE

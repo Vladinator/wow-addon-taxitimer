@@ -37,6 +37,7 @@
 ---@field paths table<number, table<number, number>> `paths[from][to]` is the id of the first path between two taxi nodes, like the addon has it.
 ---@field points table<number, TaxiDataPoint> By point id.
 ---@field pathPoints table<number, number[]> The point ids of each path in flight order.
+---@field pathEnds table<number, { from: number, to: number }> The taxi nodes each path goes between, by path id (all of the paths, also the ones `paths` does not have as there is another between the same taxi nodes).
 ---@field pathNames? table<number, string>
 ---@field nodeName fun(id: number): string
 ---@field pathName fun(path: number): string?
@@ -100,6 +101,7 @@ return function(ctx)
 			lib = lib,
 			nodes = readNodes(client),
 			paths = {},
+			pathEnds = {},
 			points = {},
 			pathPoints = {},
 			nodeName = function(id)
@@ -124,6 +126,7 @@ return function(ctx)
 		for _, chunk in ipairs(lib.DB.taxipath or {}) do
 			for _, row in ipairs(chunk) do
 				local from, to = row[PATH.FROMTAXINODE], row[PATH.TOTAXINODE]
+				data.pathEnds[row[PATH.ID]] = { from = from, to = to }
 				local destinations = data.paths[from]
 				if not destinations then
 					destinations = {}

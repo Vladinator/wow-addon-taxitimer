@@ -4,6 +4,7 @@
 ---@class FlightArchive
 ---@field merge fun(path: string, records: FlightRecord[]): FlightRecord[], number, number Adds the flights that are new to the file at `path` and returns all of its flights from old to new, how many were added and how many could not be kept.
 ---@field mergeGossip fun(path: string, records: GossipFlightRecord[]): GossipFlightRecord[], number, number The same for the gossip flights.
+---@field flightKey fun(record: FlightRecord): string? What tells a flight from every other, nothing for one that does not say when it was flown.
 
 ---@param ctx AnalysisContext
 ---@return FlightArchive
@@ -209,6 +210,7 @@ return function(ctx)
 	end
 
 	return {
+		flightKey = flightKey,
 		merge = function(path, records)
 			return mergeRecords(path, records, "flights", flightKey)
 		end,

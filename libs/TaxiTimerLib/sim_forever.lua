@@ -44,8 +44,9 @@ sim.SPEED_MODIFIERS = {
 sim.NODE_SPEEDS = {
 }
 
--- If a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins).
-sim.CARRY_SPEED = false
+-- Taxi maps where a speed that was set by a path carries on into the next path (the flight does not go back to the speed of the taxi map as a path begins, a slow part of a path goes on past the taxi node).
+sim.AREA_CARRY = {
+}
 
 -- Taxi maps where the stopwatch keeps the estimate and is not adjusted while we fly.
 sim.AREA_FIXED_TIME = {
@@ -67,6 +68,13 @@ sim.AREA_SPACING = {
 -- Paths that change the flight speed as they pass their points, as `[pathId] = { [point index] = speed }`. The speed is flown from that point until a later point of the path changes it.
 -- These speeds are not part of the client data, so they come from recorded flights. The first point of a path must have a speed.
 sim.PATH_SPEEDS = {
+}
+
+-- The speeds a path is flown at when the flight takes off on it or lands on it, as `[pathId] = { takeoff = { speed of each point }, landing = { speed of each point } }`. They are the speeds of `AREA_RAMPS` for the path: the ramps of the taxi map are not used at the end of the flight where the path has its own.
+-- A flight that passes through a taxi node does not take off or land there, it keeps its speed, so these are only used where the flight begins or ends. `PATH_SPEEDS` are used wherever the path is flown.
+-- These speeds are not part of the client data, so they come from recorded flights.
+---@type table<number, TaxiTimerLib-1.0_PathRamp>
+sim.PATH_RAMPS = {
 }
 
 ---@diagnostic expect-next-line: deprecated

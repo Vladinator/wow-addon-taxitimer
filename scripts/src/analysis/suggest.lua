@@ -12,7 +12,7 @@ local DISTANCE_SCALE_MIN_FLIGHTS = 3 -- flights on a taxi map without positions 
 local DISTANCE_SCALE_MIN_SHARE = 0.02 -- how much longer or shorter than the simulation the flights take, as a share, before it is scaled
 
 ---@param ctx AnalysisContext
----@return fun(analyses: FlightAnalysis[], simFile?: string, listJoins?: boolean): SuggestedChanges[]
+---@return fun(analyses: FlightAnalysis[], simFile?: string, listJoins?: boolean, prunePaths?: boolean, pruneMap?: number): SuggestedChanges[]
 return function(ctx)
 	local util = ctx.util
 	local format, concat = string.format, table.concat
@@ -26,6 +26,8 @@ return function(ctx)
 	local suggestNodeSpeeds = dofile(folder .. "nodes.lua")(ctx, common) ---@type fun(m: SuggestMap)
 	local paths = dofile(folder .. "paths.lua")(ctx, common)
 	local joins = dofile(folder .. "joins.lua")(ctx, common)
+	local prune = dofile(folder .. "prune.lua")(ctx, common)
+	local findTransit = dofile(ctx.dir .. "/src/analysis/transit.lua")
 	local override = common.override
 
 	-- the flights by taxi map, and what speeds they were flown at
@@ -84,7 +86,7 @@ return function(ctx)
 			out[#out + 1] = format("    remove from AREA_SPEEDS:    [%d] = ...", map)
 			m.restores[#m.restores + 1] = override(lib.Sim, "AREA_SPEEDS", map, nil)
 		else
-			out[#out + 1] = format("    %s AREA_SPEEDS:    [%d] = %d,", m.sim.speeds[map] and "change in" or "add to", map, m.cruise)
+			out[#out + 1] = format("    %s AREA_SPEEDS:    [%d] = %d,%s", m.sim.speeds[map] and "change in" or "add to", map, m.cruise, #m.flights < 2 and (" -- (" .. common.THIN .. ")") or "")
 			m.restores[#m.restores + 1] = override(lib.Sim, "AREA_SPEEDS", map, m.cruise)
 		end
 	end
@@ -134,6 +136,55 @@ return function(ctx)
 		for i = #m.restores, 1, -1 do
 			m.restores[i]()
 		end
+		-- with the sim file as it is, to see if the data of the taxi map looks odd
+		local odd = 0
+		for _, seconds in ipairs(common.flightErrors(m.lib, m.map, m.tried)) do
+			odd = odd + (seconds >= common.ODD_SECONDS and 1 or 0)
+		end
+		m.odd = odd
+	end
+
+	-- the entries for single paths that the flights do not need, in place of the other suggestions
+	---@param analyses FlightAnalysis[]
+	---@param simFile string
+	---@param pruneMap? number Only the flights of this taxi map are looked at, the entries of the other taxi maps are not.
+	---@return string[] suggestions
+	local function pruneClient(analyses, simFile, pruneMap)
+		local suggestions = {} ---@type string[]
+		printf("\nEntries to take out of %s\n", simFile)
+		local lib = analyses[1].lib
+		local maps, mapOrder = groupByMap(analyses)
+		local transit = findTransit(analyses)
+		local state = prune.new()
+		local default = util.round(lib.TAXI_SPEED_FALLBACK / lib.TAXI_SPEED_SCALE / 5) * 5
+		---@type SuggestSim
+		local sim = {
+			speeds = lib.Sim.AREA_SPEEDS,
+			ramps = lib.Sim.AREA_RAMPS,
+			spacing = lib.Sim.AREA_SPACING,
+			nodes = lib.Sim.NODE_SPEEDS,
+			paths = lib.Sim.PATH_SPEEDS,
+			pathRamps = lib.Sim.PATH_RAMPS,
+		}
+		for _, map in ipairs(mapOrder) do
+			if not pruneMap or pruneMap == map then
+				local info = maps[map]
+				---@type SuggestMap
+				local m = { lib = lib, sim = sim, scale = lib.TAXI_SPEED_SCALE, transit = transit, map = map, flights = info.flights, cruise = findCruise(info.time, default), tried = {}, out = {}, restores = {}, odd = 0, average = 0, worst = 0 }
+				m.tried = ramps.observe(m)
+				prune.map(m, state)
+			end
+		end
+		local unsupported = prune.finish(state, lib)
+		if pruneMap then
+			unsupported = {} -- the flights of the other taxi maps were not looked at, so what they fly is not known
+		end
+		if #state.health == 0 then
+			print("\n  no flights on that taxi map")
+		else
+			prune.print(state, suggestions, unsupported)
+		end
+		return suggestions
 	end
 
 	-- Prints what to change in the sim file for the flights of a game to be estimated better.
@@ -148,7 +199,9 @@ return function(ctx)
 		local scale = lib.TAXI_SPEED_SCALE
 		local default = util.round(lib.TAXI_SPEED_FALLBACK / scale / 5) * 5
 		local maps, mapOrder = groupByMap(analyses)
+		local transit = findTransit(analyses)
 		local changes = 0
+		local odd = {} ---@type string[]
 		local pathState = paths.new()
 		---@type SuggestSim
 		local sim = {
@@ -157,13 +210,17 @@ return function(ctx)
 			spacing = lib.Sim.AREA_SPACING,
 			nodes = lib.Sim.NODE_SPEEDS,
 			paths = lib.Sim.PATH_SPEEDS,
+			pathRamps = lib.Sim.PATH_RAMPS,
 		}
 
 		for _, map in ipairs(mapOrder) do
 			local info = maps[map]
 			---@type SuggestMap
-			local m = { lib = lib, sim = sim, scale = scale, map = map, flights = info.flights, cruise = findCruise(info.time, default), tried = {}, out = {}, restores = {}, average = 0, worst = 0 }
+			local m = { lib = lib, sim = sim, scale = scale, transit = transit, map = map, flights = info.flights, cruise = findCruise(info.time, default), tried = {}, out = {}, restores = {}, odd = 0, average = 0, worst = 0 }
 			suggestMap(m, default, pathState)
+			if m.odd > 0 then
+				odd[#odd + 1] = format("taxi map %d has %d flight%s %d sec or more off", map, m.odd, m.odd == 1 and "" or "s", common.ODD_SECONDS)
+			end
 			if #m.out > 0 then
 				changes = changes + 1
 				printf("\n  taxi map %d (%d flights, mostly flown at %d)\n", map, #m.flights, m.cruise)
@@ -198,6 +255,9 @@ return function(ctx)
 			print("\n  the sim file already matches what was flown")
 		end
 		print("\n  the speeds are compared rounded to the nearest 5, and the time spent loading another map is left out of how long a flight took")
+		if #odd > 0 then
+			printf("\n  odd data: %s. Run with --prune (or --prune=MAP for one taxi map) to see which entries for single paths it goes by and which of them are not needed\n", concat(odd, "; "))
+		end
 		return suggestions
 	end
 
@@ -206,7 +266,7 @@ return function(ctx)
 	---@param simFile? string The sim file to compare to instead of the ones of the games.
 	---@param listJoins? boolean If every taxi node that was flown past is listed with how it was flown.
 	---@return SuggestedChanges[] suggested What was suggested for the sim file of each game.
-	return function(analyses, simFile, listJoins)
+	return function(analyses, simFile, listJoins, prunePaths, pruneMap)
 		local suggested = {} ---@type SuggestedChanges[]
 		local clients = {} ---@type table<string, FlightAnalysis[]>
 		local order = {} ---@type string[]
@@ -220,7 +280,8 @@ return function(ctx)
 		end
 		for _, client in ipairs(order) do
 			local file = simFile or (ctx.root .. "/libs/TaxiTimerLib/sim_" .. client .. ".lua")
-			suggested[#suggested + 1] = { simFile = file, data = clients[client][1].data, lines = suggestClient(clients[client], file, listJoins or false) }
+			local lines = prunePaths and pruneClient(clients[client], file, pruneMap) or suggestClient(clients[client], file, listJoins or false)
+			suggested[#suggested + 1] = { simFile = file, data = clients[client][1].data, lines = lines }
 		end
 		return suggested
 	end

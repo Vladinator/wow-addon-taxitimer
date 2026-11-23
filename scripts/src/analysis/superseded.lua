@@ -2,7 +2,8 @@
 -- The flights of the builds of the game are compared, and the older ones are left out where the newest ones differ, so the sim file follows the game as it is now.
 
 local SECONDS = 3 -- seconds the flights of a route must differ between two builds of the game for the older ones to be left out
-local MAP_FLIGHTS = 2 -- flights on the newest build a taxi map needs before its speed is compared to the older builds
+local MAP_FLIGHTS = 8 -- flights on the newest build a taxi map needs before its speed is compared to the older builds (a few flights can all be from the nodes or paths of a taxi map that fly at another speed than the rest)
+local MAP_SHARE = 0.6 -- how much of the time the newest flights must be flown at a speed for it to be the speed of the taxi map now
 
 ---@param ctx AnalysisContext
 ---@return fun(list: FlightAnalysis[]): string[]
@@ -40,17 +41,20 @@ return function(ctx)
 		end
 	end
 
-	-- the speed a taxi map is mostly flown at
+	-- the speed a taxi map is mostly flown at, and how much of the time that is
 	---@param flights FlightAnalysis[]
 	---@return number? speed
+	---@return number share
 	local function cruise(flights)
 		local time = {} ---@type table<number, number>
+		local total = 0
 		for _, a in ipairs(flights) do
 			for j = 2, #a.track do
 				local step = a.steps[j]
 				if step.kind == "move" then
 					local speed = a:roundSpeed(step.speed)
 					time[speed] = (time[speed] or 0) + step.dt
+					total = total + step.dt
 				end
 			end
 		end
@@ -61,7 +65,7 @@ return function(ctx)
 				best, bestTime = speed, time[speed]
 			end
 		end
-		return best
+		return best, total > 0 and bestTime / total or 0
 	end
 
 	-- how long a route takes
@@ -85,7 +89,13 @@ return function(ctx)
 		for _, key in ipairs(order) do
 			local builds = util.keys(maps[key])
 			local newest = builds[#builds]
-			local now = #maps[key][newest] >= MAP_FLIGHTS and cruise(maps[key][newest]) or nil
+			local now, share = nil, 0 ---@type number?, number
+			if #maps[key][newest] >= MAP_FLIGHTS then
+				now, share = cruise(maps[key][newest])
+			end
+			if share < MAP_SHARE then
+				now = nil
+			end
 			for i = 1, #builds - 1 do
 				local before = cruise(maps[key][builds[i]])
 				if now and before and before ~= now then

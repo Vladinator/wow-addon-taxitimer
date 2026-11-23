@@ -8,6 +8,7 @@
 ---@field passed table<number, boolean> The taxi nodes flights flew past.
 ---@field paths table<number, boolean> The paths that were flown.
 ---@field single table<number, boolean> The paths that were flown on a flight of just two taxi nodes, which tells how long the path takes on its own.
+---@field transit table<number, number> The taxi nodes that flights only passed through, which are not places to fly from or to.
 
 ---The taxi nodes and the paths of a map.
 ---@class AnalysisCoverageMap
@@ -24,6 +25,7 @@ return function(ctx)
 	local util = ctx.util
 	local printf = util.printf
 	local format = string.format
+	local findTransit = dofile(ctx.dir .. "/src/analysis/transit.lua")
 
 	-- taxi nodes that are not for players: hidden hubs, teleport networks, quest paths and test nodes
 	---@param name string
@@ -44,7 +46,7 @@ return function(ctx)
 				local name = a.data.client
 				local seen = clients[name]
 				if not seen then
-					seen = { data = a.data, flights = {}, started = {}, passed = {}, paths = {}, single = {} }
+					seen = { data = a.data, flights = {}, started = {}, passed = {}, paths = {}, single = {}, transit = {} }
 					clients[name] = seen
 					clientOrder[#clientOrder + 1] = name
 				end
@@ -89,7 +91,7 @@ return function(ctx)
 					map.flown = map.flown + (seen.paths[path] and 1 or 0)
 					-- what a flight of only that path would tell: a path never flown, or only flown as part of a longer flight
 					local target = data.nodes[to]
-					if not seen.single[path] and target and not isHidden(node.name) and not isHidden(target.name) then
+					if not seen.single[path] and target and not isHidden(node.name) and not isHidden(target.name) and not seen.transit[id] and not seen.transit[to] then
 						local dx, dy, dz = target.x - node.x, target.y - node.y, target.z - node.z
 						local yards = math.sqrt(dx * dx + dy * dy + dz * dz)
 						if yards >= MIN_FLIGHT_YARDS then
@@ -177,8 +179,14 @@ return function(ctx)
 
 	return function(analyses)
 		local clients, clientOrder = collect(analyses)
+		local byClient = {} ---@type table<string, FlightAnalysis[]>
+		for _, a in ipairs(analyses) do
+			byClient[a.data.client] = byClient[a.data.client] or {}
+			table.insert(byClient[a.data.client], a)
+		end
 		for _, name in ipairs(clientOrder) do
 			local seen = clients[name]
+			seen.transit = findTransit(byClient[name] or {})
 			local maps = mapsOf(seen)
 			printf("\nWhere the %s flights are (the maps are the ones the taxi nodes are on, the taxi nodes of both factions are counted)\n", name)
 			local with, without = {}, {} ---@type number[], number[]
@@ -194,6 +202,13 @@ return function(ctx)
 			end)
 			for _, id in ipairs(with) do
 				printMap(seen, id, maps[id])
+			end
+			local transitNodes = {} ---@type number[]
+			for node in pairs(seen.transit) do
+				transitNodes[#transitNodes + 1] = node
+			end
+			if #transitNodes > 0 then
+				printf("  taxi nodes that flights only pass through, which are not places to fly from or to, so they are left out of the paths to fly: %s\n", names(seen.data, transitNodes, 8))
 			end
 			printWithout(seen.data, maps, without)
 		end
