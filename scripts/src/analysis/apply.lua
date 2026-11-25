@@ -11,7 +11,7 @@
 ---@field text string The suggestion as it was shown.
 
 ---Writes the suggestions into a sim file, and returns how many were written and the ones that were not.
----@alias ApplyChanges fun(simFile: string, suggestions: string[], data: TaxiData, includeThin?: boolean): number, string[]
+---@alias ApplyChanges fun(simFile: string, suggestions: string[], data: TaxiData, includeThin?: boolean): number, string[], string[]
 
 ---@param ctx AnalysisContext
 ---@return ApplyChanges
@@ -166,36 +166,105 @@ return function(ctx)
 		return true
 	end
 
-	-- `NODE_JOINS` has a table in a table for each taxi node, so all of it is written again with the changes
+	-- how the entries of a table with a table in a table for each taxi node are read from the suggestion and written
+	---@class AppliedNested
+	---@field name string The table of the sim file.
+	---@field read fun(text: string): any? What the suggestion sets, `nil` if it does not.
+	---@field show fun(value: any): string
+	---@field current fun(data: TaxiData): table<number, table<number, table<number, any>>>
+
+	---@type AppliedNested[]
+	local NESTED = {
+		{
+			name = "NODE_JOINS",
+			read = function(text)
+				local last, first = text:match("= { (%d+), (%d+) } } }")
+				return last and { tonumber(last), tonumber(first) } or nil
+			end,
+			show = function(join)
+				return format("{ %d, %d }", join[1], join[2])
+			end,
+			current = function(data)
+				return data.lib.Sim.NODE_JOINS
+			end,
+		},
+		{
+			name = "NODE_STOP_OFFSETS",
+			read = function(text)
+				return tonumber(text:match("= (%d+%.?%d*) } }") or text:match("%[%d+%] = { %[%d+%] = (%d+%.?%d*) }"))
+			end,
+			show = function(seconds)
+				return format("%.1f", seconds)
+			end,
+			current = function(data)
+				return data.lib.Sim.NODE_STOP_OFFSETS
+			end,
+		},
+		{
+			name = "NODE_STOPS",
+			read = function(text)
+				return tonumber(text:match("= (%d+) } }") or text:match("%[%d+%] = { %[%d+%] = (%d+) }"))
+			end,
+			show = function(point)
+				return format("%d", point)
+			end,
+			current = function(data)
+				return data.lib.Sim.NODE_STOPS
+			end,
+		},
+	}
+
+	-- a table with a table in a table for each taxi node (`NODE_JOINS`, `NODE_STOPS`), so all of it is written again with the changes
 	---@param lines string[]
 	---@param changes AppliedChange[]
 	---@param data TaxiData
+	---@param nested AppliedNested
 	---@return number applied
-	local function applyJoins(lines, changes, data)
-		local first, last = findTable(lines, "NODE_JOINS")
+	---@return string[] written The suggestions that were written.
+	local function applyNested(lines, changes, data, nested)
+		local first, last = findTable(lines, nested.name)
 		if not first or not last then
-			return 0
+			return 0, {}
 		end
-		local joins = {} ---@type table<number, table<number, table<number, number[]>>>
-		for node, fromNodes in pairs(data.lib.Sim.NODE_JOINS) do
+		local joins = {} ---@type table<number, table<number, table<number, any>|number>>
+		for node, fromNodes in pairs(nested.current(data)) do
 			joins[node] = {}
 			for from, toNodes in pairs(fromNodes) do
-				joins[node][from] = {}
-				for to, join in pairs(toNodes) do
-					joins[node][from][to] = join
+				-- a number is for every taxi node it goes on to
+				if type(toNodes) == "table" then
+					joins[node][from] = {}
+					for to, join in pairs(toNodes) do
+						joins[node][from][to] = join
+					end
+				else
+					joins[node][from] = toNodes
 				end
 			end
 		end
 		local applied = 0
+		local written = {} ---@type string[]
 		for _, change in ipairs(changes) do
 			local node, from, to = change.text:match("%[(%d+)%] = { %[(%d+)%] = { %[(%d+)%] = ")
-			local flownLast, flownFirst = change.text:match("= { (%d+), (%d+) } } }")
+			local value = nested.read(change.text)
 			node, from, to = tonumber(node), tonumber(from), tonumber(to)
-			if node and from and to and (change.action == "remove" or flownLast) then
+			if node and from and to and (change.action == "remove" or value) then
 				joins[node] = joins[node] or {}
-				joins[node][from] = joins[node][from] or {}
-				joins[node][from][to] = change.action ~= "remove" and { tonumber(flownLast), tonumber(flownFirst) } or nil
+				if type(joins[node][from]) ~= "table" then
+					joins[node][from] = {}
+				end
+				joins[node][from][to] = change.action ~= "remove" and value or nil
 				applied = applied + 1
+				written[#written + 1] = change.text
+			else
+				-- for every taxi node it goes on to
+				local every, ofFrom = change.text:match("%[(%d+)%] = { %[(%d+)%] = %d+ }")
+				node, from = tonumber(every), tonumber(ofFrom)
+				if node and from and value then
+					joins[node] = joins[node] or {}
+					joins[node][from] = value
+					applied = applied + 1
+					written[#written + 1] = change.text
+				end
 			end
 		end
 		local block = {} ---@type string[]
@@ -203,13 +272,19 @@ return function(ctx)
 			local entries = {} ---@type string[]
 			for _, from in ipairs(util.keys(joins[node])) do
 				-- all of the joins from a taxi node are in one entry, a key that is written twice would only keep the last
-				local targets, names = {}, {} ---@type string[], string[]
-				for _, to in ipairs(util.keys(joins[node][from])) do
-					local join = joins[node][from][to]
-					targets[#targets + 1] = format("[%d] = { %d, %d }", to, join[1], join[2])
-					names[#names + 1] = data.nodeName(to)
+				local ofFrom = joins[node][from]
+				if type(ofFrom) == "number" then
+					entries[#entries + 1] = format("\t\t[%d] = %s, -- %s > any", from, nested.show(ofFrom), data.nodeName(from))
+				else
+					local targets, names = {}, {} ---@type string[], string[]
+					for _, to in ipairs(util.keys(ofFrom)) do
+						targets[#targets + 1] = format("[%d] = %s", to, nested.show(ofFrom[to]))
+						names[#names + 1] = data.nodeName(to)
+					end
+					if #targets > 0 then
+						entries[#entries + 1] = format("\t\t[%d] = { %s }, -- %s > %s", from, table.concat(targets, ", "), data.nodeName(from), table.concat(names, "; "))
+					end
 				end
-				entries[#entries + 1] = format("\t\t[%d] = { %s }, -- %s > %s", from, table.concat(targets, ", "), data.nodeName(from), table.concat(names, "; "))
 			end
 			if #entries > 0 then
 				block[#block + 1] = format("\t[%d] = { -- %s", node, data.nodeName(node))
@@ -225,7 +300,7 @@ return function(ctx)
 		for i, line in ipairs(block) do
 			table.insert(lines, first + i, line)
 		end
-		return applied
+		return applied, written
 	end
 
 	-- Writes the suggestions into the sim file.
@@ -235,15 +310,17 @@ return function(ctx)
 	---@param includeThin? boolean Also write the suggestions that go by one flight.
 	---@return number applied How many changes were written.
 	---@return string[] held The suggestions that were not written, as they need more flights or a look.
+	---@return string[] written The suggestions that were written.
 	return function(simFile, suggestions, data, includeThin)
 		local changes, held = parse(suggestions, includeThin or false)
+		local written = {} ---@type string[]
 		if #changes == 0 then
-			return 0, held
+			return 0, held, written
 		end
 		local text = shim.readfile(simFile)
 		if not text then
 			util.warn("unable to read %s", simFile)
-			return 0, held
+			return 0, held, written
 		end
 		local newline = text:find("\r\n", 1, true) and "\r\n" or "\n"
 		local lines = {} ---@type string[]
@@ -255,32 +332,47 @@ return function(ctx)
 		end
 
 		local applied = 0
-		local joins = {} ---@type AppliedChange[]
+		local nestedChanges = {} ---@type table<string, AppliedChange[]>
 		for _, change in ipairs(changes) do
-			if change.name == "NODE_JOINS" then
-				joins[#joins + 1] = change
-			elseif applyLine(lines, change) then
-				applied = applied + 1
-			else
-				held[#held + 1] = change.text
+			local isNested = false
+			for _, nested in ipairs(NESTED) do
+				if change.name == nested.name then
+					isNested = true
+					nestedChanges[nested.name] = nestedChanges[nested.name] or {}
+					table.insert(nestedChanges[nested.name], change)
+				end
+			end
+			if not isNested then
+				if applyLine(lines, change) then
+					applied = applied + 1
+					written[#written + 1] = change.text
+				else
+					held[#held + 1] = change.text
+				end
 			end
 		end
-		if #joins > 0 then
-			local count = applyJoins(lines, joins, data)
-			applied = applied + count
-			if count < #joins then
-				held[#held + 1] = format("%d of the changes to NODE_JOINS", #joins - count)
+		for _, nested in ipairs(NESTED) do
+			local list = nestedChanges[nested.name]
+			if list then
+				local count, texts = applyNested(lines, list, data, nested)
+				applied = applied + count
+				for _, text_ in ipairs(texts) do
+					written[#written + 1] = text_
+				end
+				if count < #list then
+					held[#held + 1] = format("%d of the changes to %s", #list - count, nested.name)
+				end
 			end
 		end
 		if applied > 0 then
 			local file = io.open(simFile, "wb")
 			if not file then
 				util.warn("unable to write %s", simFile)
-				return 0, held
+				return 0, held, {}
 			end
 			file:write(table.concat(lines, newline), newline)
 			file:close()
 		end
-		return applied, held
+		return applied, held, written
 	end
 end

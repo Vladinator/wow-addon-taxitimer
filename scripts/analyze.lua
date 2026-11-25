@@ -10,7 +10,7 @@ After the summary of the flights it lists the lines to add, change or remove in 
 The speeds of a taxi map come first (its speed, how it takes off and lands, and if it flies slower where the points are close to each other), then the taxi nodes whose mount flies at another speed (the whole flight is flown on the mount of the node it starts at), and a path only gets its own speeds if it is still off by a few seconds with those.
 With `--apply` the changes are written to the sim file and the flights are analyzed again until nothing is left, so recording flights and running this is all it takes to keep the sim files up to date.
 Before that it lists the flights the simulation is still off by with the sim file as it is now, and what makes each of them differ (the distance and how the taxi nodes were flown past, the speed of a path, loading).
-Then how the game flies past taxi nodes where the simulation does it another way (`NODE_JOINS` and `RETRACE_EXCEPTIONS`), going by where the flights went.
+Then how the game flies past taxi nodes where the simulation does it another way (`NODE_JOINS` and `RETRACE_EXCEPTIONS`), going by where the flights went, and where the bar shows such a taxi node (`NODE_STOPS`, which only moves it on the timeline) when a flight that landed there shows the route divides before it.
 The gossip options that put the player on a flight we have nothing for (`gossipFlights` of the saved variables, kept in `data/recordings_gossip.lua`) are listed last, with the flights between the taxi nodes near where they started and ended that take as long as they did, and the line to add to `GossipToFlight` when it is clear which one it was.
 Taxi nodes that every flight only passes through (never a start or an end, like Old Loamm Road between Zaralek Cavern and Ohn'ahran Plains) are found from the flights: the paths at them are judged from the flights that cross them, as they can not be flown on their own, and they are not suggested to be flown.
 How a flight takes off and lands is told apart from the speeds of a path: what is flown slower than the taxi map where a flight begins or ends on a path is the speeds of taking off and landing of the path (`PATH_RAMPS`), and is only used there, as a flight that passes a taxi node keeps its speed.
@@ -34,6 +34,9 @@ Options:
 	--sim=FILE      the sim file to suggest changes to (default is the one of this addon for the game the flights were recorded on)
 	--worst=SECONDS the seconds a flight must be off by with the sim file as it is now to be listed with what causes it (default 5)
 	--coverage      show how much of each map has been flown, the paths that have no flight of their own yet (all on a small map, the shortest on a big one), and the maps without flights, to see where to fly next
+	--checkpoints   for every taxi node a flight passed without landing, show when the simulation says it is reached against when the flight was at the same point, as the bar of the addon shows them
+	--paths=TEXT    list the paths that leave the taxi nodes with TEXT in their name (can be repeated): the id of the path, its length in a straight line and how many flights flew it, to pick what to fly or to look up an id
+	--early         list the flights that asked to land early (the stop button): when it was asked, where the flight landed and how long it went on for, to see where the point of no return is at a taxi node that is flown past
 	--joins         list every taxi node that was flown past with the points that were flown there, to see where the simulation flies past a node another way than the game
 	--thin          with --apply, also write the suggestions that go by one flight (they say so, and are held back as they are only as good as that flight)
 	--prune[=MAP]   look at the entries of the sim file for single paths (PATH_SPEEDS and PATH_RAMPS) and suggest taking out the ones the flights do not need, for one taxi map or all of them (in place of the other suggestions, run the analysis again after)
@@ -69,12 +72,16 @@ local loadData = dofile(scriptDir .. "/src/analysis/data.lua")(ctx) ---@type Tax
 local Flight = dofile(scriptDir .. "/src/analysis/flight.lua")(ctx)
 local suggestAll = dofile(scriptDir .. "/src/analysis/suggest.lua")(ctx)
 local applyChanges = dofile(scriptDir .. "/src/analysis/apply.lua")(ctx) ---@type ApplyChanges
+local mirrorChanges, mirrorAll = dofile(scriptDir .. "/src/analysis/mirror.lua")(ctx, loadData, applyChanges)
 local parseOptions = dofile(scriptDir .. "/src/analysis/options.lua")(ctx)
 local loadRecords = dofile(scriptDir .. "/src/analysis/records.lua")(ctx)
 local leaveOutSuperseded = dofile(scriptDir .. "/src/analysis/superseded.lua")(ctx)
 local printSummary = dofile(scriptDir .. "/src/analysis/summary.lua")(ctx)
 local printSpeeds = dofile(scriptDir .. "/src/analysis/speeds.lua")(ctx)
 local printCoverage = dofile(scriptDir .. "/src/analysis/coverage.lua")(ctx)
+local printCheckpoints = dofile(scriptDir .. "/src/analysis/checkpoints.lua")(ctx)
+local printPaths = dofile(scriptDir .. "/src/analysis/paths.lua")()
+local printEarly = dofile(scriptDir .. "/src/analysis/early.lua")()
 local checkBaseline = dofile(scriptDir .. "/src/analysis/check.lua")(ctx)
 local printGossip = dofile(scriptDir .. "/src/analysis/gossip.lua")(ctx)
 
@@ -113,7 +120,15 @@ local function analyzeFlights(quiet)
 					warn("flight %s skipped: %s", tostring(index), tostring(dataErr))
 				end
 			else
-				list[#list + 1] = Flight.new(index, record, data, opts.near, opts.far)
+				local flight = Flight.new(index, record, data, opts.near, opts.far)
+				list[#list + 1] = flight
+				-- a flight that landed early at a taxi node is also the flight of the route up to it
+				local prefix, node = flight:landedEarlyRecord()
+				if prefix and node then
+					local pseudo = Flight.new(index, prefix, data, opts.near, opts.far)
+					pseudo.warnings[#pseudo.warnings + 1] = string.format("this is flight %d as if its route ended at the taxi node %d of it, where it landed after asking to land early (what it did before that is all that is used)", index, node)
+					list[#list + 1] = pseudo
+				end
 			end
 		end
 	end
@@ -128,11 +143,18 @@ local function suggestChanges(analyses)
 	for pass = 1, opts.apply and 5 or 0 do
 		local written = 0
 		for _, changes in ipairs(suggested) do
-			local count, held = applyChanges(changes.simFile, changes.lines, changes.data, opts.thin)
+			local count, held, lines = applyChanges(changes.simFile, changes.lines, changes.data, opts.thin)
 			written = written + count
 			printf("\n%d change%s written to %s\n", count, count == 1 and "" or "s", changes.simFile)
 			for _, line in ipairs(held) do
 				print("  not written, it needs more flights or a look: " .. line)
+			end
+			-- what is the same in the other games is written to them too
+			if not opts.simFile then
+				written = written + mirrorChanges(changes.data.client, changes.simFile, lines, analyses)
+				if pass == 1 then
+					written = written + mirrorAll(changes.data.client, changes.simFile, analyses)
+				end
 			end
 		end
 		if written == 0 then
@@ -194,6 +216,18 @@ if opts.speeds then
 end
 if opts.coverage then
 	printCoverage(analyses)
+	shown = shown + 1
+end
+if opts.checkpoints then
+	printCheckpoints(analyses)
+	shown = shown + 1
+end
+if opts.early then
+	printEarly(analyses)
+	shown = shown + 1
+end
+if #opts.paths > 0 then
+	printPaths(analyses, opts.paths)
 	shown = shown + 1
 end
 

@@ -126,6 +126,8 @@ local function newEnvironment()
 	local env = setmetatable({}, { __index = _G }) ---@type table<string, any>
 	env._G = env
 	env.strmatch = string.match -- used by LibStub.lua, the game has it
+	-- the math functions the library uses without `math.`, the game has them as globals
+	env.sqrt, env.min, env.max = math.sqrt, math.min, math.max
 	return env
 end
 

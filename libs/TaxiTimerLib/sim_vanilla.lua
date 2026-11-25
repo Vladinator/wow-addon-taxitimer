@@ -33,6 +33,19 @@ sim.RETRACE_EXCEPTIONS = {
 sim.NODE_JOINS = {
 }
 
+-- Where the bar shows a taxi node that is flown past, where it was seen to be another place than the last point that is flown of the path arriving (which `NODE_JOINS` and the rules above give), as it is where the route divides to cut the corner there.
+-- `[node] = { [from] = { [to] = point } }` when flying from the taxi node `from` past `node` to the taxi node `to`: `point` is the last point of the path arriving at `node` that the taxi node is shown at.
+-- `[node] = { [from] = point }` is for every taxi node it goes on to, where the flights to more than one of them show the same place (the route divides in one place on the way, which all of them fly).
+-- This only moves where the taxi node is on the timeline, how long the flight takes is the same.
+sim.NODE_STOPS = {
+}
+
+-- Where the stop of a taxi node that is flown past was seen to still be possible to ask for, later than the last point that is flown of the path arriving (which `NODE_JOINS` and `NODE_STOPS` give), as the flight cuts the corner there.
+-- `[node] = { [from] = { [to] = seconds } }`, or `[node] = { [from] = seconds }` for all of the taxi nodes it goes on to, when flying from the taxi node `from` past `node` to the taxi node `to`.
+-- The seconds are added to when the bar shows the taxi node, never past landing there. This only moves the taxi node on the timeline, how long the flight takes is the same.
+sim.NODE_STOP_OFFSETS = {
+}
+
 -- Spells that make the flight path mount fly faster or slower, the speeds of the flight are multiplied by `multiplier` for a player that knows the spell (so it is not part of the speeds below).
 -- The addon checks if the spell is known as the flight is estimated, and the flight records the multiplier it used.
 sim.SPEED_MODIFIERS = {

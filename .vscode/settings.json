@@ -19,7 +19,8 @@
         "libs/LibStub",
         "libs/LibEditMode",
         "libs/TaxiTimerLib/db_*.lua",
-        "scripts/*"
+        "scripts/data/*",
+        "scripts/tests/*"
     ],
     "Lua.diagnostics.disable": [
         "toc-file-name"

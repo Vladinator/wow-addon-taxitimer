@@ -9,6 +9,7 @@ local AGREE_RAMP_SPEED = 10 -- the most they can be apart, in speed, at those po
 local RAMP_MIN_SECONDS = 2 -- the same for the speeds of taking off and landing of a path, which are the same every time
 local RAMP_CONFIRMED_SECONDS = 1.5 -- and when two or more flights flew the path
 local TRANSIT_SKIP_POINTS = 3 -- points next to a taxi node that flights only pass through that a flight does not fly, as it is past the node before it has the points of the path
+local PATH_CHECKPOINTS_WORSE = 2 -- seconds the taxi nodes along the way can get further from where the flights were, in all, for the speeds of a path to be suggested
 local SINGLE_HOP_WORSE = 0.5 -- seconds a flight of only that path can get worse for the speeds of the path to be suggested, as such a flight is the clearest there is of how the path is flown
 local RAMP_MAX_POINTS = 6 -- points at one end of a path that can be taking off or landing, a longer stretch that is flown slower is a slow part of the path
 
@@ -554,6 +555,8 @@ return function(ctx, common)
 			if (new ~= nil or newRamp ~= nil) and (state.lines[path] or state.rampLines[path]) and onMap[path] then
 				local before = secondsOff(lib, m.map, m.tried)
 				local beforeFlights = common.flightErrors(lib, m.map, m.tried)
+				-- the taxi nodes along the way are shown where the speeds put them, so a change that makes the total right must not move them away from where the flights were
+				local beforeCheckpoints, beforeReached = common.checkpointsOff(lib, m.map, m.tried)
 				local restores = {} ---@type (fun())[]
 				if new ~= nil then
 					restores[#restores + 1] = override(lib.Sim, "PATH_SPEEDS", path, new or nil)
@@ -563,6 +566,7 @@ return function(ctx, common)
 				end
 				local after = secondsOff(lib, m.map, m.tried)
 				local afterFlights = common.flightErrors(lib, m.map, m.tried)
+				local afterCheckpoints, afterReached = common.checkpointsOff(lib, m.map, m.tried)
 				for i = #restores, 1, -1 do
 					restores[i]()
 				end
@@ -574,7 +578,10 @@ return function(ctx, common)
 						worsened = flight.index
 					end
 				end
-				if worsened then
+				if afterReached < beforeReached or afterCheckpoints - beforeCheckpoints > PATH_CHECKPOINTS_WORSE then
+					state.notes[path] = format("    path %d (%s) would make the taxi nodes along the way further from where the flights were (%.1f sec off now, %.1f with it, %d to %d of them reached), so it is left alone", path, (m.tried[1] and m.tried[1].analysis.data.pathName(path)) or "?", beforeCheckpoints, afterCheckpoints, beforeReached, afterReached)
+					state.lines[path], state.rampLines[path] = nil, nil
+				elseif worsened then
 					state.notes[path] = format("    path %d (%s) would make flight %d, which only flew that path, more than %s sec worse, so it is left alone", path, (m.tried[1] and m.tried[1].analysis.data.pathName(path)) or "?", worsened, tostring(SINGLE_HOP_WORSE))
 					state.lines[path], state.rampLines[path] = nil, nil
 				elseif before - after < PATH_MIN_NET_SECONDS then

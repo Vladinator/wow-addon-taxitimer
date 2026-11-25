@@ -9,7 +9,7 @@
 ---@field seconds number How long the flight took, without the time spent loading.
 
 ---The tables of the simulation that are changed for a moment.
----@alias SuggestTable "AREA_SPEEDS"|"AREA_DISTANCE_SCALE"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"|"PATH_RAMPS"
+---@alias SuggestTable "AREA_SPEEDS"|"AREA_DISTANCE_SCALE"|"AREA_RAMPS"|"AREA_SPACING"|"NODE_SPEEDS"|"NODE_JOINS"|"NODE_STOPS"|"NODE_STOP_OFFSETS"|"RETRACE_EXCEPTIONS"|"PATH_SPEEDS"|"PATH_RAMPS"
 
 ---The tables of the simulation as they were when the suggestions began, the changes that are tried are in the entries of these.
 ---@class SuggestSim
@@ -105,6 +105,28 @@ return function(ctx)
 			errors[i] = result and abs(flight.seconds - result.duration) or 0
 		end
 		return errors
+	end
+
+	-- how far the taxi nodes along the way are from when the flights were there, with the tables the simulation has now: the seconds in all for the ones the flights were near the point of the simulation at, and how many of them that is
+	---@param lib TaxiTimerLib-1.0
+	---@param area number
+	---@param flights SuggestFlight[]
+	---@return number seconds
+	---@return number reached
+	function common.checkpointsOff(lib, area, flights)
+		local seconds, reached = 0, 0
+		for _, flight in ipairs(flights) do
+			local info = lib.GetFlightInfoFromGeometry(flight.geometry, area, flight.analysis.record.speedModifier)
+			if info then
+				for _, fit in ipairs(flight.analysis:checkpointFits(info)) do
+					if fit.yards <= flight.analysis.far then
+						seconds = seconds + abs(fit.seconds)
+						reached = reached + 1
+					end
+				end
+			end
+		end
+		return seconds, reached
 	end
 
 	-- how many seconds the estimates of the flights are off by in all, with the tables the simulation has now

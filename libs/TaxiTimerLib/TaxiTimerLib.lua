@@ -823,7 +823,7 @@ local function GetRetrace(arriving, leaving)
 	local function GetReach(node, edge)
 		local dx = node.x - edge.x
 		local dy = node.y - edge.y
-		return math.sqrt(dx * dx + dy * dy)
+		return sqrt(dx * dx + dy * dy)
 	end
 
 	if GetReach(arriving[last + 1], arriving[numArriving]) + GetReach(leaving[first - 1], leaving[1]) >= RETRACE_REACH then
@@ -1282,7 +1282,7 @@ function lib.GetFlightTimeLeft(info, distance)
 		local step = steps[i]
 
 		if distance >= step.distanceLeft then
-			return step.durationLeft + math.min(distance - step.distanceLeft, step.distance) / step.speed
+			return step.durationLeft + min(distance - step.distanceLeft, step.distance) / step.speed
 		end
 	end
 
@@ -1300,7 +1300,27 @@ end
 ---@field public lands boolean If the flight lands at the taxi node (the first and last of the route), `false` where it passes the taxi node without landing.
 ---@field public pointIndex number The index in `info.points` of the point flown at the taxi node.
 ---@field public distance number The yards flown when it is reached.
----@field public time number The seconds flown when it is reached, going by the speeds of the flight.
+---@field public time number The seconds flown when it is reached, going by the speeds of the flight. Where the flight cuts the corner to fly past the taxi node it is the last time the stop can be asked for.
+---@field public offset number The seconds `time` is later than the point of the flight at the taxi node (`pointIndex`), where it was seen that the stop can be asked for after the flight has gone past that point.
+---@field public landDistance number The yards flown when the flight lands at the taxi node after asking to stop there. It is `distance` where the flight flies to the taxi node, and more where the path to it is cut short to fly past it (the rest of the path is flown to land).
+---@field public landTime number The seconds flown when the flight lands at the taxi node after asking to stop there, going by the speeds of the flight.
+
+-- What a table of the sim file that is for flying past a taxi node has for flying from one taxi node past another to a third: `[node] = { [from] = { [to] = value } }`, or `[node] = { [from] = value }` for all of the taxi nodes it goes on to.
+---@param entries table<number, table<number, table<number, number>|number>>
+---@param node number
+---@param from number
+---@param to number
+---@return number?
+local function GetPassingEntry(entries, node, from, to)
+	local ofNode = entries[node]
+	local ofFrom = ofNode and ofNode[from]
+
+	if type(ofFrom) == "number" then
+		return ofFrom
+	end
+
+	return ofFrom and ofFrom[to] or nil
+end
 
 -- Returns where the flight reaches each taxi node of its route, to show the progress of the flight.
 -- The first is at 0 yards and 0 seconds, the last at `info.distance` and `info.duration`.
@@ -1312,7 +1332,7 @@ function lib.GetFlightCheckpoints(info)
 	local numPoints = #points
 
 	-- the yards and seconds flown when each point is reached, there is no step between where a segment ends and the next begins
-	local distances, times = {}, {} ---@type number[], number[]
+	local distances, times, speeds = {}, {}, {} ---@type number[], number[], number[]
 	local distance, time = 0, 0
 	local numPoint, numStep = 0, 0
 
@@ -1324,6 +1344,7 @@ function lib.GetFlightCheckpoints(info)
 			if j < #segments[i].points then
 				numStep = numStep + 1
 				local step = steps[numStep]
+				speeds[numPoint] = step.speed
 				distance = distance + step.distance
 				time = time + step.distance / step.speed
 			end
@@ -1353,6 +1374,46 @@ function lib.GetFlightCheckpoints(info)
 					break
 				end
 			end
+
+			-- where the taxi node was seen to be reached, which only moves where it is shown (the points that are flown are the same)
+			local stop = GetPassingEntry(lib.Sim.NODE_STOPS, nodes[i].nodeID, nodes[i - 1].nodeID, nodes[i + 1].nodeID)
+
+			if found and stop then
+				while index > from and points[index].pathId == pathId and points[index].index > stop do
+					index = index - 1
+				end
+
+				if points[index].pathId ~= pathId then
+					index = index + 1
+				end
+			end
+		end
+
+		-- asking to stop lands at the taxi node, so the part of the path that is left out to fly past it is flown after all, at the speed it was flown at before
+		local landDistance, landTime = distances[index] or 0, times[index] or 0
+
+		if i > 1 and i < #nodes and points[index] and points[index].pathId == info.arrivals[i - 1] then
+			local arriving = GetTaxiPathNodes(points[index].pathId)
+			local speed = speeds[index - 1] or speeds[index]
+
+			if arriving and speed and speed > 0 then
+				local left = 0
+
+				for j = points[index].index, #arriving - 1 do
+					left = left + GetDistance(arriving[j], arriving[j + 1])
+				end
+
+				landDistance = landDistance + left
+				landTime = landTime + left / speed
+			end
+		end
+
+		-- where it was seen that the stop can still be asked for, which is later than the point the taxi node is shown at where the flight cuts the corner, and never after landing
+		local offset = 0
+
+		if i > 1 and i < #nodes then
+			offset = GetPassingEntry(lib.Sim.NODE_STOP_OFFSETS, nodes[i].nodeID, nodes[i - 1].nodeID, nodes[i + 1].nodeID) or 0
+			offset = max(min(offset, landTime - (times[index] or 0)), 0)
 		end
 
 		from = index
@@ -1362,7 +1423,10 @@ function lib.GetFlightCheckpoints(info)
 			lands = i == 1 or i == #nodes,
 			pointIndex = index,
 			distance = distances[index] or 0,
-			time = times[index] or 0,
+			time = (times[index] or 0) + offset,
+			offset = offset,
+			landDistance = landDistance,
+			landTime = landTime,
 		}
 	end
 

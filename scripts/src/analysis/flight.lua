@@ -385,7 +385,7 @@ return function(ctx)
 	end
 
 	-- when we first passed a point after `after` seconds, going by the samples of the flight
-	---@param point TaxiDataPoint
+	---@param point TaxiDataPoint|TaxiTimerLib-1.0_TaxiPathNode
 	---@param after number
 	---@return number? seconds
 	function Flight:passedAt(point, after)
@@ -411,13 +411,145 @@ return function(ctx)
 		end
 	end
 
+	-- when the flight was closest to a point, going by the samples of the flight, and how far from it, for a point it flew by without coming as near as `near`
+	---@param point TaxiDataPoint|TaxiTimerLib-1.0_TaxiPathNode
+	---@return number? seconds After the click.
+	---@return number? yards
+	function Flight:closestTo(point)
+		if self.noPosition then
+			return nil
+		end
+		local best, bestAt ---@type number?, number?
+		for _, sample in ipairs(self.track) do
+			if self:sameMap(sample.map, point.map) then
+				local yards = hypot(sample.x - point.x, sample.y - point.y)
+				if not best or yards < best then
+					best, bestAt = yards, sample.t
+				end
+			end
+		end
+		return bestAt, best
+	end
+
+	-- Where the flight lands at the taxi node of the route that is the `k`th, which is where the path arriving at it ends (the point the bar shows it at is earlier where the flight cuts the corner to fly past it).
+	---@param info TaxiTimerLib-1.0_FlightInfo
+	---@param k number
+	---@return TaxiDataPoint? point
+	function Flight:landingPoint(info, k)
+		local numNodes = #info.nodes
+		if k == numNodes then
+			local last = info.points[#info.points]
+			return last and self.data.points[last.id] or last
+		end
+		local arriving = info.arrivals[k - 1]
+		local ids = arriving and self.data.pathPoints[arriving]
+		return ids and self.data.points[ids[#ids]] or nil
+	end
+
+	-- A flight that asked to land early and landed at a taxi node of its route that is not the last is a flight of the route up to that taxi node, which is all that is known of it. That is the record of such a flight, as if the route ended there, so it can be looked at like the others.
+	---@return FlightRecord? record `nil` if the flight did not land early at a taxi node before the destination, or it can not be told where it landed.
+	---@return number? node The place of the taxi node in the route.
+	function Flight:landedEarlyRecord()
+		local r = self.record
+		local route = r.route
+		if not r.early or self.noPosition or #self.track < 2 or type(route) ~= "table" or #route < 3 or not r.area then
+			return nil
+		end
+		local info = self:replay()
+		if not info then
+			return nil
+		end
+		local last = self.track[#self.track]
+		local nearest, nearestYards = nil, max(self.far, 100)
+		for k = 2, #info.nodes do
+			local point = self:landingPoint(info, k)
+			if point and self:sameMap(last.map, point.map) then
+				local yards = hypot(last.x - point.x, last.y - point.y)
+				if yards < nearestYards then
+					nearest, nearestYards = k, yards
+				end
+			end
+		end
+		-- the last taxi node is the destination, which is what the flight is without asking to land early
+		if not nearest or nearest >= #info.nodes then
+			return nil
+		end
+		local copy = {} ---@type table<string, any>
+		for key, value in pairs(r) do
+			copy[key] = value
+		end
+		local prefix, nodes = {}, {} ---@type number[], TaxiTimerLib-1.0_TaxiRouteNode[]
+		for i = 1, nearest do
+			prefix[i] = route[i]
+			nodes[i] = { nodeID = route[i] }
+		end
+		local trips ---@type table<number, number[]>?
+		for i = 1, nearest - 1 do
+			if r.trips and r.trips[i] then
+				trips = trips or {}
+				trips[i] = r.trips[i]
+			end
+		end
+		local geometry = self.lib.GetFlightGeometry(nodes, nil, nil, trips)
+		local prefixInfo = self.lib.GetFlightInfoFromGeometry(geometry, r.area, r.speedModifier)
+		if not prefixInfo or #geometry.points == 0 then
+			return nil
+		end
+		local points, segments, numPoints = {}, {}, 0 ---@type number[], FlightRecordSegment[], number
+		for i, point in ipairs(geometry.points) do
+			points[i] = point.id
+		end
+		for i, segment in ipairs(geometry.segments) do
+			segments[i] = { first = numPoints + 1, last = numPoints + #segment.points, distance = segment.distance, distance2D = segment.distance2D, speed = prefixInfo.speed }
+			numPoints = numPoints + #segment.points
+		end
+		copy.route, copy.trips, copy.points, copy.segments = prefix, trips, points, segments
+		copy.early = nil
+		copy.estimate, copy.distance, copy.distance2D = prefixInfo.duration, prefixInfo.distance, prefixInfo.distance2D
+		copy.speed, copy.areaSpeed = prefixInfo.speed, prefixInfo.areaSpeed
+		return copy --[[@as FlightRecord]], nearest
+	end
+
+	---Where the flight was when the simulation says it reaches a taxi node it passed without landing.
+	---@class FlightCheckpointFit
+	---@field index number The place of the taxi node in the route.
+	---@field node number
+	---@field simulated number Seconds after take off the simulation gives.
+	---@field seconds number Seconds after take off the flight was closest to the point of the simulation, less `simulated`.
+	---@field yards number How far the flight was from that point at its closest.
+
+	-- Where the flight was at each taxi node it passed without landing, with the simulation as it is (or what the estimate `info` of the flight with other tables is).
+	-- A flight that has no positions, was not whole, or went through a loading screen has none, as there is nothing to tell where it was when.
+	---@param info? TaxiTimerLib-1.0_FlightInfo
+	---@return FlightCheckpointFit[]
+	function Flight:checkpointFits(info)
+		local fits = {} ---@type FlightCheckpointFit[]
+		info = info or self:replay()
+		if not info or self.noPosition or self.incomplete or self.jumpTime ~= 0 then
+			return fits
+		end
+		local checkpoints = self.lib.GetFlightCheckpoints(info)
+		for k = 2, #checkpoints - 1 do
+			local point = info.points[checkpoints[k].pointIndex]
+			local at, yards = nil, nil
+			if point then
+				at, yards = self:closestTo(point)
+			end
+			if at and yards then
+				fits[#fits + 1] = { index = k, node = checkpoints[k].nodeID, simulated = checkpoints[k].time - checkpoints[k].offset, seconds = at - self.start - (checkpoints[k].time - checkpoints[k].offset), yards = yards }
+			end
+		end
+		return fits
+	end
+
 	-- the last point we flew of the path arriving at a taxi node and the first point we flew of the path leaving it, going by the samples of the flight
 	---@param arriving number The id of the path.
 	---@param leaving number The id of the path.
+	---@param until_? number Seconds after the click that the last point of the path arriving that is flown has to be passed by, where the flight left the track of one that landed at the taxi node.
 	---@return number? last
 	---@return number? first
 	---@return boolean? whole If all of the two paths was flown at the taxi node.
-	function Flight:flownJoin(arriving, leaving)
+	function Flight:flownJoin(arriving, leaving, until_)
 		local data = self.data
 		local arrivingPoints, leavingPoints = data.pathPoints[arriving], data.pathPoints[leaving]
 		if not arrivingPoints or not leavingPoints then
@@ -427,6 +559,9 @@ return function(ctx)
 		local last, t = nil, -INF
 		for i = 1, #arrivingPoints do
 			local passed = self:passedAt(data.points[arrivingPoints[i]], t)
+			if passed and until_ and passed > until_ then
+				passed = nil
+			end
 			if passed then
 				last, t = i, passed
 			elseif last then

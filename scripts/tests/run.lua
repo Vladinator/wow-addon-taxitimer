@@ -17,7 +17,7 @@ elseif root == "" then
 end
 TAXITIMER_ROOT = root
 
-local tests = { "gps_test.lua", "gossip_test.lua", "settings_test.lua" }
+local tests = { "gps_test.lua", "gossip_test.lua", "settings_test.lua", "apply_test.lua", "mirror_test.lua", "lib_test.lua", "progress_test.lua" }
 local total = 0
 for _, name in ipairs(tests) do
 	print("\n" .. name)

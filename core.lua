@@ -536,7 +536,7 @@ local Visualization do
 	end
 
 	-- Moves what is shown up to where we are, never back unless the position says we were well ahead.
-	-- If we asked to stop and are still flying well past it, the stop came too late for that node and the flight goes on as it was (`missed`).
+	-- If we asked to stop and are still flying well past it, the stop came too late for that node (`missed`): the game lands at the next taxi node instead, which is where the stop is for now, and the flight goes on as it was if that is the last one.
 	---@param now number
 	---@return number shown
 	---@return boolean missed
@@ -545,7 +545,11 @@ local Visualization do
 		local missed = false
 		if self.stopAt then
 			if self.positioned and self.elapsed + (now - self.elapsedAt) > self.stopAt + STOP_GRACE then
+				local nextIndex = self.stopIndex and self.stopIndex + 1
 				self.stopAt, self.stopIndex = nil, nil
+				if nextIndex and self.checkpoints and nextIndex < #self.checkpoints then
+					self:SetStop(nextIndex)
+				end
 				missed = true
 			else
 				target = min(target, self.stopAt) -- the flight ends there
@@ -588,7 +592,8 @@ local Visualization do
 	function Progress:SetStop(index)
 		local checkpoint = self.checkpoints and self.checkpoints[index]
 		if checkpoint then
-			self.stopAt, self.stopIndex = checkpoint.time, index
+			-- we land at the taxi node, which is later than where the bar shows it where the flight cuts the corner to fly past it
+			self.stopAt, self.stopIndex = checkpoint.landTime, index
 		end
 	end
 
@@ -657,7 +662,7 @@ local Visualization do
 	---@field public flashToken number Tells the hiding that waits for the flash if it is still the one that should happen.
 	---@field public done Texture What is flown of the route up to the last taxi node we passed.
 	---@field public cut Texture What is left of the bar after the taxi node we land at when we ask to stop, it is not flown.
-	---@field public stopMarker Texture Where that is.
+	---@field public stopMarker VisualizationNotch Where that is, a notch of its own that tells about the landing when it is hovered.
 	---@field public notches VisualizationNotch[]
 	---@field public hovered? VisualizationNotch The notch the tooltip is shown for.
 	---@field public hoveredAt number `GetTime()` when the tooltip was made.
@@ -871,15 +876,31 @@ local Visualization do
 				GameTooltip:AddLine("Landing before reaching this location.", 0.8, 0.8, 0.8)
 			elseif flown < checkpoint.time then
 				GameTooltip:AddLine(format("%s until it is reached", TimeLeftText(checkpoint.time - flown)), 0.8, 0.8, 0.8)
-				if stopIndex then
-					if self.number == stopIndex then
-						GameTooltip:AddLine("Stop requested: landing at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
-					end
-				elseif TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= flown) then
+				-- once a stop is asked for the notch of where we land says so, the others do not offer it again
+				if not stopIndex and TaxiRequestEarlyLanding and self.number < #checkpoints and (self.number == 2 or checkpoints[self.number - 1].time <= flown) then
 					GameTooltip:AddLine("Request Stop: land at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
 				end
 			end
 		end
+		GameTooltip:Show()
+	end
+
+	-- the tooltip of the notch that is where we land after asking to stop, which is later than the taxi node on the bar where the flight cuts the corner to fly past it
+	---@param self VisualizationNotch
+	local function StopTooltip(self)
+		local checkpoint = self.checkpoint
+		if not progress.flight or not checkpoint then
+			return
+		end
+		local flown = progress:Elapsed(GetTime())
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:AddLine(NodeName(checkpoint), 1, 1, 1)
+		-- the same lines as the other notches, with the time of landing and the confirmation of the stop
+		local landsAt = progress.stopAt or checkpoint.landTime
+		if flown < landsAt then
+			GameTooltip:AddLine(format("%s until it is reached", TimeLeftText(landsAt - flown)), 0.8, 0.8, 0.8)
+		end
+		GameTooltip:AddLine("Stop requested: landing at this Flight Master.", STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3])
 		GameTooltip:Show()
 	end
 
@@ -985,10 +1006,8 @@ local Visualization do
 		self.cut:SetTexture(WHITE_TEXTURE)
 		self.cut:SetVertexColor(0, 0, 0, 0.6)
 		self.cut:Hide()
-		self.stopMarker = overlay:CreateTexture(nil, "OVERLAY", nil, 3)
-		skin.Pip(self.stopMarker)
-		self.stopMarker:SetVertexColor(STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3], 1)
-		self.stopMarker:Hide()
+		self.stopMarker = self:CreateNotch(f, StopTooltip, overlay:GetFrameLevel() + 6)
+		self.stopMarker.line:SetVertexColor(STOP_COLOR[1], STOP_COLOR[2], STOP_COLOR[3], 1)
 
 		-- what is flown of the route up to the last taxi node we passed, cut off where that is the way the experience bar cuts off what it predicts
 		self.done = skin.Done(self.fill)
@@ -1088,9 +1107,13 @@ local Visualization do
 		self.cut:SetPoint("TOPLEFT", self.fill, "TOPLEFT", x, 0)
 		self.cut:SetPoint("BOTTOMRIGHT", self.fill, "BOTTOMRIGHT")
 		self.cut:Show()
-		self.stopMarker:ClearAllPoints()
-		self.stopMarker:SetPoint("CENTER", self.fill, "LEFT", x, 0)
-		self.stopMarker:Show()
+		local marker = self.stopMarker
+		local checkpoint = progress.checkpoints and progress.checkpoints[index]
+		if checkpoint then
+			marker.checkpoint, marker.number = checkpoint, index
+		end
+		marker:Place(x)
+		marker:Show()
 		for i = index + 1, #self.notches do
 			self.notches[i]:Dim(true)
 		end
@@ -1444,10 +1467,10 @@ local Visualization do
 
 	---@type TaxiTimerLib-1.0_FlightCheckpoint[]
 	local EXAMPLE_CHECKPOINTS = {
-		{ nodeID = 1, name = "Departure", lands = true, pointIndex = 1, distance = 0, time = 0 },
-		{ nodeID = 2, name = "First stop", lands = false, pointIndex = 1, distance = 0, time = 34 },
-		{ nodeID = 3, name = "Second stop", lands = false, pointIndex = 1, distance = 0, time = 61 },
-		{ nodeID = 4, name = "Destination", lands = true, pointIndex = 1, distance = 0, time = 90 },
+		{ nodeID = 1, name = "Departure", lands = true, pointIndex = 1, distance = 0, time = 0, offset = 0, landDistance = 0, landTime = 0 },
+		{ nodeID = 2, name = "First stop", lands = false, pointIndex = 1, distance = 0, time = 34, offset = 0, landDistance = 0, landTime = 34 },
+		{ nodeID = 3, name = "Second stop", lands = false, pointIndex = 1, distance = 0, time = 61, offset = 0, landDistance = 0, landTime = 61 },
+		{ nodeID = 4, name = "Destination", lands = true, pointIndex = 1, distance = 0, time = 90, offset = 0, landDistance = 0, landTime = 90 },
 	}
 
 	---@type Partial<TaxiTimerLib-1.0_FlightInfo>
@@ -1514,7 +1537,11 @@ local Visualization do
 		-- where we are is only known every half second, so the bar goes on at the speed of the simulation until then
 		local shown, missed = progress:Advance(now)
 		if missed then
-			bar:ClearStopMarks() -- the stop came too late for that node and the flight goes on as it was
+			-- the stop came too late for that node, so the flight lands at the next one if there is one, and goes on as it was if not
+			bar:ClearStopMarks()
+			if progress.stopAt and progress.stopIndex then
+				bar:MarkStop(progress.stopAt, progress.stopIndex)
+			end
 		end
 		local started = progress.startTime ~= nil
 		bar:SetFill(shown / info.duration, started)
@@ -1799,6 +1826,7 @@ local Recorder do
 
 	-- we asked to land early, which ends the flight at the next taxi node
 	-- on the last leg that is the destination, so the flight is no different and it is not marked
+	-- the last leg begins where we land at the last taxi node before it, which is later than where the bar shows that taxi node where the flight cuts the corner to fly past it, and a stop asked for in between is the one that tells where it can no longer be
 	function Recorder:RequestStop()
 		local flight = current
 		if not flight or not flight.record.firstTaxi or flight.record.early then
@@ -1806,7 +1834,7 @@ local Recorder do
 		end
 		local checkpoints = TTL.GetFlightCheckpoints(flight.info)
 		local flown = GetTime() - flight.record.clicked - flight.record.firstTaxi
-		if flown < checkpoints[#checkpoints - 1].time then
+		if flown < checkpoints[#checkpoints - 1].landTime then
 			flight.record.early = Round(GetTime() - flight.record.clicked, 2)
 		end
 	end

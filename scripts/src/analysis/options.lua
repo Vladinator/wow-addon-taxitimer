@@ -12,6 +12,9 @@
 ---@field client? TaxiTimerLib-1.0_GameFlavor The game to use instead of the one the flights were recorded on.
 ---@field simFile? string
 ---@field coverage boolean
+---@field paths string[] Text of the names of the taxi nodes to list the paths of.
+---@field early boolean List the flights that asked to land early.
+---@field checkpoints boolean Show when the taxi nodes along the way are reached.
 ---@field keepSuperseded boolean
 ---@field archivePath? string The file every flight is kept in.
 ---@field apply boolean
@@ -35,7 +38,7 @@ return function(ctx)
 	---@param scriptPath string
 	---@return never
 	local function usage(scriptPath)
-		warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--wow=FOLDER] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--apply] [--thin] [--check] [--update-baseline] [--tolerance=1] [--prune[=MAP]] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
+		warn("usage: lua %s [SavedVariables/TaxiTimer.lua] [--wow=FOLDER] [--flight=N] [--all] [--speeds] [--joins] [--coverage] [--checkpoints] [--early] [--paths=TEXT] [--apply] [--thin] [--check] [--update-baseline] [--tolerance=1] [--prune[=MAP]] [--archive=FILE] [--no-archive] [--keep-old] [--worst=5] [--sim=FILE] [--no-suggest] [--client=mainline|forever|classic|vanilla] [--near=25] [--far=60]", scriptPath)
 		os.exit(1)
 	end
 
@@ -48,6 +51,9 @@ return function(ctx)
 			suggest = true,
 			joins = false,
 			coverage = false,
+			checkpoints = false,
+			early = false,
+			paths = {},
 			keepSuperseded = false,
 			archivePath = ctx.dataDir .. "/recordings.lua",
 			apply = false,
@@ -94,6 +100,12 @@ return function(ctx)
 				opts.pruneMap = tonumber(option:match("=(%d+)"))
 			elseif option == "--coverage" then
 				opts.coverage = true
+			elseif option:match("^--paths=.+$") then
+				opts.paths[#opts.paths + 1] = option:match("^--paths=(.+)$")
+			elseif option == "--early" then
+				opts.early = true
+			elseif option == "--checkpoints" then
+				opts.checkpoints = true
 			elseif option:match("^--worst=[%d.]+$") then
 				opts.worstSeconds = tonumber(option:match("=([%d.]+)")) or opts.worstSeconds
 			elseif option == "--joins" then
